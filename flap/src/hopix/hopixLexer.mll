@@ -11,7 +11,6 @@
   let error lexbuf =
     error "lexing" (lex_join lexbuf.lex_start_p lexbuf.lex_curr_p)
 
-
 }
 
 let newline = ('\010' | '\013' | "\013\010")
@@ -74,20 +73,73 @@ let char = '\'' atom '\''
 let string = '"' ((atom_s | ''' |'\"') ) * '"'
 
 
+let single_line_comment = "##" [^ '\010' '\013']* newline
+
+
 rule token = parse
   (* Comments ignore *)
-  
-
-
+  | single_line_comment { token lexbuf }
+  | "{*" { comment lexbuf }
   
 
   (* Keywords *)
+  | "let" {LET}
+  | "fun" {FUN}
+  | "and" {AND}
+  | "if" {IF}
+  | "match" {MATCH}
+  | "then" {THEN}
+  | "else" {ELSE}
+  | "<"  {LANGLE}
+  | ">" {RANGLE}
+  | "," {COMMA}
+  | "." {DOT}
+  | ":" {COLON}
+  | ";" {SEMICOLON}
+  | "!" {EXCLAMATION}
+  | "\\" {ANTISLASH}
+  | "do" {DO}
+  | "while" {WHILE}
+  | "until" {UNTIL}
+  | "for" {FOR}
+  | "from" {FROM}
+  | "to" {TO}
+  | ":=" {AFFECTATION}
+  | "+" {PLUS}
+  | "-" {MINUS}
+  | "*" {TIMES}
+  | "/" {DIV}
+  | "=" {EQUAL}
+  | "&&" {LOGAND}
+  | "||" {LOGOR}
+  | "=?" {EQUALITY}
+  | "<=?" {LESS_OR_EQ}
+  | ">=?" {GREATER_OR_EQ}
+  | "<?" {LESS}
+  | ">?" {GREATER}
+  | "|" {PIPE}
+  | "&" {CONJONCTION}
+  | "->" {ARROW}
+  | "("  {LPAREN}
+  | ")" {RPAREN}
+  | "{" {RCURLYB}
+  | "}" {LCURLYB}
+  | "[" {RSQUAREB}
+  | "]" {LSQUAREB}
+  | "type" {TYPE}
+  | "extern" {EXTERN}
+  | "ref" {REF}
+  | "_" {UNDERSCORE}
 
 
-  (*Symbols *)
+
+
+
+  (* Symbols *)
 
 
   (* Regexs *)
+
   
 
   (* Layout *)
@@ -97,4 +149,12 @@ rule token = parse
 
   (* Lexing error. *)
   | _               { error lexbuf "unexpected character." }
+
+
+
+and comment = parse
+  | "*}"           { token lexbuf }
+  | "{*"           { let a = comment lexbuf in comment lexbuf; }
+  | newline        { next_line_and comment lexbuf }
+  | _              { comment lexbuf }
 
