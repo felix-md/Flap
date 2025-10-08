@@ -90,6 +90,17 @@ rule token = parse
   | "match" {MATCH}
   | "then" {THEN}
   | "else" {ELSE}
+  | "while" {WHILE}
+  | "do" {DO}
+  | "until" {UNTIL}
+  | "for" {FOR}
+  | "from" {FROM}
+  | "to" {TO}
+  | "type" {TYPE}
+  | "extern" {EXTERN}
+  | "ref" {REF}
+
+  (* Symbols *)
   | "<"  {LANGLE}
   | ">" {RANGLE}
   | "," {COMMA}
@@ -98,12 +109,19 @@ rule token = parse
   | ";" {SEMICOLON}
   | "!" {EXCLAMATION}
   | "\\" {ANTISLASH}
-  | "do" {DO}
-  | "while" {WHILE}
-  | "until" {UNTIL}
-  | "for" {FOR}
-  | "from" {FROM}
-  | "to" {TO}
+  | "|" {PIPE}
+  | "&" {CONJONCTION}
+  | "->" {ARROW}
+  | "("  {LPAREN}
+  | ")" {RPAREN}
+  | "{" {RCURLYB}
+  | "}" {LCURLYB}
+  | "[" {RSQUAREB}
+  | "]" {LSQUAREB}
+  | "_" {UNDERSCORE}
+  
+
+  (* Operation *)
   | ":=" {AFFECTATION}
   | "+" {PLUS}
   | "-" {MINUS}
@@ -117,29 +135,15 @@ rule token = parse
   | ">=?" {GREATER_OR_EQ}
   | "<?" {LESS}
   | ">?" {GREATER}
-  | "|" {PIPE}
-  | "&" {CONJONCTION}
-  | "->" {ARROW}
-  | "("  {LPAREN}
-  | ")" {RPAREN}
-  | "{" {RCURLYB}
-  | "}" {LCURLYB}
-  | "[" {RSQUAREB}
-  | "]" {LSQUAREB}
-  | "type" {TYPE}
-  | "extern" {EXTERN}
-  | "ref" {REF}
-  | "_" {UNDERSCORE}
-
-
-
-
-
-  (* Symbols *)
-
+  
 
   (* Regexs *)
-
+  | int { INT (int_of_string (Lexing.lexeme lexbuf)) }
+  | ident {ID (Lexing.lexeme lexbuf)}
+  | id_data_const {DATAID (Lexing.lexeme lexbuf)}
+  | type_variable {TVAR (Lexing.lexeme lexbuf)}
+  | char { CHAR (Lexing.lexeme lexbuf)}
+  | string {STR (Lexing.lexeme lexbuf)}
   
 
   (* Layout *)
