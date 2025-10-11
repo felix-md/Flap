@@ -112,60 +112,117 @@ pattern ::=
 program: defs=definition* EOF { defs }
 
 definition:
+  // type type_con [ < type_variable { , type_variable } > ] [ = tdefinition ] 
   | TYPE tcon=located(DATAID) tvars=type_params? td=type_definition? 
     { 
-      let td = match td with 
-        | None -> None 
-        | Some td -> Some td
-      in
-      DefineType (tcon, Option.value ~default:[] tvars, td)
+      DefineType (
+        Position.map (fun s -> TCon s) tcon ,
+        List.map (Position.map (fun s -> TId s)) (Option.value ~default:[] tvars), 
+        Option.value ~default:Abstract td)
     }
+  // extern var_id : type_scheme
   | EXTERN id=located(ID) COLON ts=located(type_scheme)
     { DeclareExtern (id, ts) }
+  // vdefinition
   | vd=vdefinition
-    { vd }
+    {DefineValue vd }
 
 type_params:
+  // < type_variable { , type_variable } >
   | LANGLE tvs=separated_list(COMMA, located(TVAR)) RANGLE { tvs }
 
 type_definition:
   | EQUAL td=tdefinition { td }
 
 tdefinition:
+  // [ | ] constr_id [ ( type { , type } ) ]  { | constr_id [ ( type { , type } ) ] }
   | PIPE? cases=separated_nonempty_list(PIPE, sum_type_case)
     { DefineSumType cases }
+  // { label_id : type { , label_id : type } } 
   | LCURLYB fields=separated_nonempty_list(COMMA, record_field) RCURLYB
     { DefineRecordType fields }
 
-sum_type_case:
-  | id=located(DATAID) tys=type_params?
-    { (id, Option.value ~default:[] tys) }
-
-record_field:
-  | id=located(ID) COLON ty=located(typ)
-    { (id, ty) }
-
-vdefinition: {}
-
-fundef: {}
-
 typ:
-  | tcon=DATAID tys=type_params?
-    { TyCon (tcon, Option.value ~default:[] tys) }
-  | t1=typ ARROW t2=typ
+  // type_con [ < type { , type } > ]  
+  | tcon=ID typs=loption(delimited(LANGLE, separated_nonempty_list(COMMA, located(typ)), RANGLE))
+    { TyCon (TCon tcon, typs) }
+  // type -> type 
+  | t1=located(typ) ARROW t2=located(typ)
     { TyArrow (t1, t2) }
-  | t1=typ TIMES t2=typ ts=preceded(TIMES, typ)*
+  // type * type { * type }
+  | t1=located(typ) TIMES t2=located(typ) ts=preceded(TIMES, located(typ))*
     { TyTuple (t1 :: t2 :: ts) }
+  // type_variable
   | tv=TVAR
-    { TyVar tv }
-  | LPAREN t=typ RPAREN
+    { TyVar (TId tv) }
+  // ( type )
+  | LPAREN t=located(typ) RPAREN
     { t }
 
-type_scheme: {}
+sum_type_case:
+  // constr_id [ ( type { , type } ) ] 
+ | constr=located(DATAID) typs=option(delimited(LPAREN, separated_nonempty_list(COMMA, located(typ)),RPAREN)) {(Position.map (fun s -> KId s) constr, typs )}
+
+record_field:
+  // label_id : type
+  | id=located(ID) COLON ty=located(typ)
+    { (Position.map (fun s -> LId s ) id, ty) }
+
+vdefinition: 
+  // let var_id [ : type_scheme ]= expr 
+  | LET id=located(ID) ts=option(preceded(COLON, located(type_scheme))) EQUAL e=located(expr) 
+    { SimpleValue (Position.map (fun s -> Id s) id , ts, e) }
+  // fun fundef { and fundef } 
+  | FUN fds=separated_nonempty_list(AND, fundef) 
+    { RecFunctions fds }
+
+fundef: 
+  // [ : type_scheme ] var_id pattern = expr
+  | ts=option(preceded(COLON, located(type_scheme))) id=located(ID) pat=located(pattern) EQUAL e=located(expr)
+    { 
+      (Position.map (fun s -> Id s ) id, ts, FunctionDefinition (pat, e))
+    }
+
+
+
+
+type_scheme: 
+  // [ [ type_variable { , type_variable } ] ] type
+  | typvars=loption(delimited(LSQUAREB, separated_nonempty_list(COMMA, type_variable), RSQUAREB)) ty=located(typ)
+  {
+    ForallTy (typvars, ty)
+  }
+
+type_variable:
+  | tv=located(TVAR) { Position.map (fun s -> TId s) tv}
 
 pattern:{}
 
-expr: {}
+expr: 
+  | n=located(INT) { Literal (LInt (Mint.of_int n))}
+  | c=located(CHAR) { Literal (LChar c)}
+  | s=located(STR) { Literal (LString s)}
+
+  | varId=located(ID)     tys=option(delimited(LANGLE,separated_nonempty_list(COMMA, located(typ)) ,RANGLE))     {Variable (Position.map (fun s -> Id s) varId ,tys )}
+
+  |constr=located(DATAID) tys=option(delimited(LANGLE,separated_nonempty_list(COMMA, located(typ)) ,RANGLE)) 
+    exps=(delimited(LPAREN,separated_list(COMMA, located(expr)),RPAREN)) 
+    { Tagged (Position.map (fun s-> KId s) constr,tys,exps)}
+
+  | LPAREN RPAREN {Tuple []}
+
+  | LPAREN e1=located(expr) COMMA e2=located(expr) es=preceded(COMMA, located(expr))* RPAREN {Tuple (e1 :: e2 :: es)}
+
+  // gère les () (e) (e,e...) en même temps
+  | LPAREN exprs=separated_list(COMMA, located(expr)) RPAREN {
+    match exprs with 
+      | [] -> Tuple []
+      | [e] -> Postion.value e
+      | _ -> Tupls exprs
+
+  }
+  // TODO finir le Record et le reste des expr et les pattern
+  |LCURLYB RCURLYB tys=option(delimited(LANGLE,separated_nonempty_list(COMMA, located(typ)) ,RANGLE)) 
 
 %inline located(X): x=X {
   Position.with_poss $startpos $endpos x
