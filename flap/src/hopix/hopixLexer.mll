@@ -142,7 +142,7 @@ rule token = parse
   | ident {ID (Lexing.lexeme lexbuf)}
   | id_data_const {DATAID (Lexing.lexeme lexbuf)}
   | type_variable {TVAR (Lexing.lexeme lexbuf)}
-  | char { CHAR (Lexing.lexeme lexbuf)}
+  | char { CHAR (Lexing.lexeme lexbuf).[1] }
   | string {STR (Lexing.lexeme lexbuf)}
   
 
