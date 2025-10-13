@@ -78,23 +78,25 @@ tdefinition:
 
 typ:
   // typ -> typ
-  | t=located(typ_without_arrow) ARROW t2=located(typ)
+  | t=located(typ_atom) ARROW t2=located(typ)
     { TyArrow (t, t2) }
-  // ceux qu'on coupe pas
-  | t=typ_without_arrow
-    { t }
-
-typ_without_arrow:
   // type * type {* type}
-  | t=typ_tuple
-    { t }
+  | t=located(typ_tuple)
+    { Position.value t }
+  // ceux qu'on coupe pas
   | t=typ_atom
     { t }
 
+
 typ_tuple:
     // au moins 2
-  | t1=located(typ_atom) TIMES t2=separated_nonempty_list(TIMES, located(typ_atom))
-    { TyTuple (t1 :: t2) }
+  | t1=located(typ_atom) TIMES t2=located(typ_atom) ts=tuple_rest
+    { TyTuple (t1 :: t2 :: ts) }
+
+// Modifié pour éviter les conflits shift/reduce avec TIMES
+tuple_rest:
+  | /* empty */ { [] }
+  | TIMES t=located(typ_atom) ts=tuple_rest { t :: ts }
 
 typ_atom:
   // type_con [ < type { , type } > ]
@@ -194,8 +196,9 @@ record_field_pattern:
   | label=located(ID) EQUAL e=located(pattern) {Position.map (fun s -> LId s) label ,e}
 
 expr: 
-// on sépare la séquence des autres expressions
+// on sépare la séquance des autre expressions
   | e=expr_seq { e }
+
 
 expr_seq:
   | e1=located(expr_base) SEMICOLON e2=located(expr_seq)
@@ -230,8 +233,8 @@ expr_field:
 // Operateurs unaires comme REF et EXCLAMATION
 expr_unary:
   | e=expr_field { e }
-  | REF e=located(expr_field) {Ref e}
-  | EXCLAMATION e=located(expr_field) {Read e}
+  | REF e=located(expr_unary) {Ref e}
+  | EXCLAMATION e=located(expr_unary) {Read e}
 
 // Fonction d'application
 expr_app:
@@ -255,43 +258,27 @@ expr_binop:
 // Les affectations ont la plus basse priorité
 expr_assign:
   | e=expr_binop { e }
-  | e1=located(expr_binop) AFFECTATION e2=located(expr_binop) {Assign (e1,e2)}
+  | e1=located(expr_binop) AFFECTATION e2=located(expr_assign) {Assign (e1,e2)}
 
 expr_base:
   | e=expr_assign { e }
   | vd=vdefinition SEMICOLON e=located(expr) {Define (vd,e)}
   | ANTISLASH p=located(pattern) ARROW e=located(expr) {Fun (FunctionDefinition (p,e))}
   | MATCH LPAREN e=located(expr) RPAREN LCURLYB b=branches RCURLYB {Case (e, b)}
-  | if_expr { IfThenElse ($1) }
-  | while_expr { While ($1) }
-  | do_until_expr { 
-    let (body, cond) = $1 in
+  | IF LPAREN cond=located(expr) RPAREN THEN LCURLYB trueb=located(expr) RCURLYB falseb=option(preceded(ELSE, delimited(LCURLYB, located(expr), RCURLYB))) {
+    match falseb with
+    | None -> IfThenElse (cond, trueb, Position.with_pos (Position.position trueb) (Tuple []))
+    | Some falseb -> IfThenElse (cond, trueb, falseb)
+  }
+  | WHILE LPAREN cond=located(expr) RPAREN LCURLYB body=located(expr) RCURLYB {While (cond,body)}
+  | DO LCURLYB body=located(expr) RCURLYB UNTIL LPAREN cond=located(expr) RPAREN {
     let while_expr = Position.with_pos (Position.position cond) (While (cond, body)) in
     Sequence [body; while_expr]
   }
-  | for_expr { 
-    let (var, inf, sup, body) = $1 in
-    For ((Position.map (fun s -> Id s) var), inf, sup, body)
+  | FOR var=located(ID) FROM LPAREN borneinf=located(expr) RPAREN TO LPAREN bornesup=located(expr) RPAREN LCURLYB body=located(expr) RCURLYB {
+    For ((Position.map (fun s -> Id s) var), borneinf, bornesup, body)
   }
   | LPAREN e=located(expr) COLON t=located(typ) RPAREN {TypeAnnotation (e, t)}
-
-if_expr:
-  | IF LPAREN cond=located(expr) RPAREN THEN LCURLYB trueb=located(expr) RCURLYB falseb=option(preceded(ELSE, delimited(LCURLYB, located(expr), RCURLYB))) {
-    match falseb with
-    | None -> (cond, trueb, Position.with_pos (Position.position trueb) (Tuple []))
-    | Some falseb -> (cond, trueb, falseb)
-  }
-
-while_expr:
-  | WHILE LPAREN cond=located(expr) RPAREN LCURLYB body=located(expr) RCURLYB {(cond, body)}
-
-do_until_expr:
-  | DO LCURLYB body=located(expr) RCURLYB UNTIL LPAREN cond=located(expr) RPAREN {(body, cond)}
-
-for_expr:
-  | FOR var=located(ID) FROM LPAREN borneinf=located(expr) RPAREN TO LPAREN bornesup=located(expr) RPAREN LCURLYB body=located(expr) RCURLYB {
-    (var, borneinf, bornesup, body)
-  }
 
 binop:
   | PLUS {"+"}
