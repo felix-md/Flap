@@ -152,10 +152,10 @@ rule token = parse
   | "->" {ARROW}
   | "("  {LPAREN}
   | ")" {RPAREN}
-  | "{" {RCURLYB}
-  | "}" {LCURLYB}
-  | "[" {RSQUAREB}
-  | "]" {LSQUAREB}
+  | "{" {LCURLYB}
+  | "}" {RCURLYB}
+  | "[" {LSQUAREB}
+  | "]" {RSQUAREB}
   | "_" {UNDERSCORE}
   
 
@@ -200,7 +200,7 @@ rule token = parse
   | eof             { EOF       }
 
   (* Lexing error. *)
-  | _               { error lexbuf "unexpected character." }
+  | _ as c            { error lexbuf ("unexpected character : " ^ (String.make 1 c)) }
 
 
 
