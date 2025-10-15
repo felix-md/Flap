@@ -11,6 +11,44 @@
   let error lexbuf =
     error "lexing" (lex_join lexbuf.lex_start_p lexbuf.lex_curr_p)
 
+
+  let interpret_char s =
+    match s with
+    | "\\n" -> '\n'
+    | "\\t" -> '\t'
+    | "\\b" -> '\b'
+    | "\\r" -> '\r'
+    | "\\\\" -> '\\'
+    | "\\'" -> '\''
+    | _ when String.length s > 3 && s.[0] = '\\' && s.[1] = '0' && s.[2] = 'x' ->
+        let hex = String.sub s 3 2 in
+        Char.chr (int_of_string ("0x" ^ hex))
+    | _ when String.length s = 1 -> s.[0]
+    | _ -> failwith "Invalid escape sequence"
+
+  (* Fonction pour interpréter une string *)
+  let interpret_string s =
+    let buf = Buffer.create (String.length s) in
+    let rec loop i =
+      if i >= String.length s then Buffer.contents buf
+      else if s.[i] = '\\' && i + 1 < String.length s then
+        match s.[i+1] with
+        | 'n' -> Buffer.add_char buf '\n'; loop (i+2)
+        | 't' -> Buffer.add_char buf '\t'; loop (i+2)
+        | 'b' -> Buffer.add_char buf '\b'; loop (i+2)
+        | 'r' -> Buffer.add_char buf '\r'; loop (i+2)
+        | '\\' -> Buffer.add_char buf '\\'; loop (i+2)
+        | '"' -> Buffer.add_char buf '"'; loop (i+2)
+        | '\'' -> Buffer.add_char buf '\''; loop (i+2)
+        | '0' when i + 4 < String.length s && s.[i+2] = 'x' ->
+            let hex = String.sub s (i+3) 2 in
+            Buffer.add_char buf (Char.chr (int_of_string ("0x" ^ hex)));
+            loop (i+5)
+        | _ -> Buffer.add_char buf s.[i]; loop (i+1)
+      else (Buffer.add_char buf s.[i]; loop (i+1))
+    in loop 0
+  
+
 }
 
 let newline = ('\010' | '\013' | "\013\010")
@@ -138,14 +176,24 @@ rule token = parse
   
 
   (* Regexs *)
-  | int { INT (int_of_string (Lexing.lexeme lexbuf)) }
+  | int { try INT (Mint.of_string (Lexing.lexeme lexbuf)) with | _ -> error lexbuf "Integer literal too large."}
   | ident {ID (Lexing.lexeme lexbuf)}
   | id_data_const {DATAID (Lexing.lexeme lexbuf)}
   | type_variable {TVAR (Lexing.lexeme lexbuf)}
-  | char { CHAR (Lexing.lexeme lexbuf).[1] }
-  | string {STR (Lexing.lexeme lexbuf)}
+  | char { 
+      let s = Lexing.lexeme lexbuf in
+      (* Enlève guillemets *)
+      let content = String.sub s 1 (String.length s - 2) in
+      CHAR (interpret_char content)
+    }
+  | string {
+      let s = Lexing.lexeme lexbuf in
+      (* Enlève les guillemets *)
+      let content = String.sub s 1 (String.length s - 2) in
+      STR (interpret_string content)
+  }
   
-
+ 
   (* Layout *)
   | newline         { next_line_and token lexbuf }
   | blank+          { token lexbuf               }

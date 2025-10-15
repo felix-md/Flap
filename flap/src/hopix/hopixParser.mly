@@ -7,7 +7,7 @@
 %}
 
 //  Avec type
-%token <int> INT
+%token <Mint.t> INT
 %token <string> ID DATAID TVAR STR
 %token <char> CHAR
 
@@ -37,7 +37,6 @@
 %nonassoc REF EXCLAMATION
 %left DOT
 %left LPAREN
-%left PIPE
 %left CONJONCTION
 
 %%
@@ -87,7 +86,12 @@ typ:
   | t=typ_atom
     { t }
 
-
+typ_in_pattern:
+  | tcon=ID typs=loption(delimited(LANGLE, separated_nonempty_list(COMMA, located(typ)), RANGLE))
+    { TyCon (TCon tcon, typs) }  
+  | tv=TVAR
+    { TyVar (TId tv) }  
+  | LPAREN t=typ RPAREN { t }  
 typ_tuple:
     // au moins 2
   | t1=located(typ_atom) TIMES t2=located(typ_atom) ts=tuple_rest
@@ -105,9 +109,7 @@ typ_atom:
   // type_variable
   | tv=TVAR
     { TyVar (TId tv) }
-  // ( type )
-  | LPAREN t=located(typ) RPAREN
-    { Position.value t }
+  | LPAREN t=located(typ) RPAREN { Position.value t } 
 
 sum_type_case:
   // constr_id [ ( type { , type } ) ] 
@@ -120,7 +122,7 @@ record_field:
 
 vdefinition: 
   // let var_id [ : type_scheme ]= expr 
-  | LET id=located(ID) ts=option(preceded(COLON, located(type_scheme))) EQUAL e=located(expr) 
+  | LET id=located(ID) ts=option(preceded(COLON, located(type_scheme))) EQUAL e=located(expr_base) 
     { SimpleValue (Position.map (fun s -> Id s) id , ts, e) }
   // fun fundef { and fundef } 
   | FUN fds=separated_nonempty_list(AND, fundef) 
@@ -128,7 +130,7 @@ vdefinition:
 
 fundef: 
   // [ : type_scheme ] var_id pattern = expr
-  | ts=option(preceded(COLON, located(type_scheme))) id=located(ID) pat=located(pattern) EQUAL e=located(expr)
+  | ts=option(preceded(COLON, located(type_scheme))) id=located(ID) pat=located(pattern) EQUAL e=located(expr_base)
     { 
       (Position.map (fun s -> Id s ) id, ts, FunctionDefinition (pat, e))
     }
@@ -178,11 +180,11 @@ pattern_base:
     | [p] -> Position.value p 
     | _ -> PTuple pats
   }
-  | p=located(pattern_base) COLON ty=located(typ) {
+  | p=located(pattern_base) COLON ty=located(typ_in_pattern) {
     PTypeAnnotation (p,ty)
   }
 
-  |n=located(INT) {PLiteral (Position.map (fun n -> LInt (Mint.of_int n)) n)}
+  |n=located(INT) {PLiteral (Position.map (fun n -> LInt n) n )}
 
   |c=located(CHAR) {PLiteral (Position.map (fun c -> LChar c) c)}
 
@@ -211,7 +213,7 @@ expr_seq:
 
 
 expr_atomic:
-  | n=located(INT) {Literal (Position.map (fun n -> LInt (Mint.of_int n)) n)}
+  | n=located(INT) {Literal (Position.map (fun n -> LInt n)n )}
   | c=located(CHAR) {Literal (Position.map (fun c -> LChar c) c)}
   | str=located(STR) {Literal (Position.map (fun str -> LString str) str)}
   | varId=located(ID) tys=option(delimited(LANGLE,separated_nonempty_list(COMMA, located(typ)),RANGLE)) 
@@ -262,8 +264,8 @@ expr_assign:
 
 expr_base:
   | e=expr_assign { e }
-  | vd=vdefinition SEMICOLON e=located(expr) {Define (vd,e)}
-  | ANTISLASH p=located(pattern) ARROW e=located(expr) {Fun (FunctionDefinition (p,e))}
+  | vd=vdefinition SEMICOLON e=located(expr_base) {Define (vd,e)}
+  | ANTISLASH p=located(pattern) ARROW e=located(expr_base) {Fun (FunctionDefinition (p,e))}
   | MATCH LPAREN e=located(expr) RPAREN LCURLYB b=branches RCURLYB {Case (e, b)}
   | IF LPAREN cond=located(expr) RPAREN THEN LCURLYB trueb=located(expr) RCURLYB falseb=option(preceded(ELSE, delimited(LCURLYB, located(expr), RCURLYB))) {
     match falseb with
@@ -295,11 +297,11 @@ binop:
 
 
 branche:
-  | p=located(pattern) ARROW e=located(expr)
+  | p=located(pattern) ARROW e=located(expr_base)
   {Position.with_pos (Position.position p) (Branch (p,e))}
 
 branches:
-  | PIPE? b=branche bs=separated_list(PIPE,branche) { b::bs }
+  | PIPE? b=branche bs=preceded(PIPE,branche)* { b::bs }
 
 record_field_expr:
   | label=located(ID) EQUAL e=located(expr) {Position.map (fun s -> LId s) label ,e}
