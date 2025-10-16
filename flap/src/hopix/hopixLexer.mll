@@ -20,12 +20,13 @@
     | "\\r" -> '\r'
     | "\\\\" -> '\\'
     | "\\'" -> '\''
-    | "\\000" -> '\000'
     (* match "\digit digit digit" to '\digit digit digit' *)
     | _ when String.length s > 3 && s.[0] = '\\' && s.[1] = '0' && s.[2] = 'x' ->
         let hex = String.sub s 3 2 in
         Char.chr (int_of_string ("0x" ^ hex))
     | _ when String.length s = 1 -> s.[0]
+    | _ when String.length s = 4 && s.[0] == '\\' ->
+        Char.chr (int_of_string (String.sub s 1 3))
     | _ -> failwith "Invalid escape sequence"
 
   (* Fonction pour interpréter une string *)
