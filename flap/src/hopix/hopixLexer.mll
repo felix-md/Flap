@@ -20,6 +20,8 @@
     | "\\r" -> '\r'
     | "\\\\" -> '\\'
     | "\\'" -> '\''
+    | "\\000" -> '\000'
+    (* match "\digit digit digit" to '\digit digit digit' *)
     | _ when String.length s > 3 && s.[0] = '\\' && s.[1] = '0' && s.[2] = 'x' ->
         let hex = String.sub s 3 2 in
         Char.chr (int_of_string ("0x" ^ hex))
@@ -87,8 +89,12 @@ let escape =
   | "\\b" 
   | "\\r"
 
+let escape_3digits = 
+  "\\" ['0'-'1'] ['0'-'9'] ['0'-'9']
+  | "\\" "2" ['0'-'5'] ['0'-'5']
+
 let atom = 
-  ['\000'-'\255'] 
+  escape_3digits
   | "\\0x" hexdigit hexdigit
   | printable 
   | escape
@@ -105,7 +111,7 @@ let atom_s =
   | escape
 
 
-let char = '\'' atom '\'' 
+let char = "\'" atom "\'"
 
 (* string qui utilise atom_s *)
 let string = '"' ((atom_s | ''' |'\"') ) * '"'
