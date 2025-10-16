@@ -218,8 +218,15 @@ expr_atomic:
   | str=located(STR) {Literal (Position.map (fun str -> LString str) str)}
   | varId=located(ID) tys=option(delimited(LANGLE,separated_nonempty_list(COMMA, located(typ)),RANGLE)) 
     {Variable (Position.map (fun s -> Id s) varId, tys)}
-  | constr=located(DATAID) tys=option(delimited(LANGLE,separated_nonempty_list(COMMA, located(typ)),RANGLE)) exps=delimited(LPAREN,separated_list(COMMA, located(expr)),RPAREN) 
-    {Tagged (Position.map (fun s-> KId s) constr, tys, exps)}
+  | constr=located(DATAID) tys=option(delimited(LANGLE,separated_nonempty_list(COMMA, located(typ)),RANGLE)) exps=option(delimited(LPAREN,separated_list(COMMA, located(expr)),RPAREN))
+    {
+      let exp = match exps with
+      | None -> []
+      | Some lst -> lst
+      in 
+      
+      
+      Tagged (Position.map (fun s-> KId s) constr, tys, exp)}
   | LPAREN RPAREN {Tuple []}
   | LPAREN e1=located(expr) COMMA e2=located(expr) es=preceded(COMMA, located(expr))* RPAREN {Tuple (e1 :: e2 :: es)}
   | LPAREN e=located(expr) RPAREN {Position.value e}
