@@ -130,7 +130,7 @@ fundef:
   | ts=option(preceded(COLON, located(type_scheme))) id=located(ID) pat=located(pattern) EQUAL e=located(expr)
     { 
       (Position.map (fun s -> Id s ) id, ts, FunctionDefinition (pat, e))
-    } %prec LETSEQ
+    }
 
 
 
@@ -202,9 +202,8 @@ expr:
     { Define (RecFunctions fds, e) } %prec LETSEQ
   | e1=located(expr) SEMICOLON e2=located(expr)
     {
-      match Position.value e2 with
-      | Sequence es -> Sequence (e1 :: es)
-      | _ -> Sequence [e1; e2]
+      (* Associativité à droite pour les séquences *)
+      Sequence [e1; e2]
     }
   | ANTISLASH p=located(pattern) ARROW e=located(expr)
     { Fun (FunctionDefinition (p, e)) }
