@@ -97,7 +97,7 @@ let single_line_comment = "##" [^ '\010' '\013']* newline
 rule token = parse
   (* Comments ignore *)
   | single_line_comment { token lexbuf }
-  | "{*" { comment lexbuf }
+  | "{*" { comment lexbuf; token lexbuf }
   
 
   (* Keywords *)
@@ -203,8 +203,8 @@ and read_string buf = parse
   | _ as c    { Buffer.add_char buf c; read_string buf lexbuf }
 
 and comment = parse
-  | "*}"           { token lexbuf }
-  | "{*"           { let a = comment lexbuf in comment lexbuf; }
+  | "*}"           { () }
+  | "{*"           { comment lexbuf; comment lexbuf }
   | newline        { next_line_and comment lexbuf }
   | _              { comment lexbuf }
 
