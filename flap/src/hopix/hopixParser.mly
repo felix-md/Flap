@@ -110,7 +110,7 @@ typ_atom:
 
 sum_type_case:
   // constr_id [ ( type { , type } ) ] 
- | constr=located(DATAID) typs=delimited(LPAREN, separated_nonempty_list(COMMA, located(typ)),RPAREN){(Position.map (fun s -> KId s) constr, typs )}
+ | constr=located(DATAID) typs=delimited(LPAREN, separated_list(COMMA, located(typ)),RPAREN){(Position.map (fun s -> KId s) constr, typs )}
 
 record_field:
   // label_id : type
@@ -262,9 +262,9 @@ atomic_expr:
   | str=located(STR) { Literal (Position.map (fun str -> LString str) str) }
   | varId=located(ID) tys=option(delimited(LANGLE, separated_nonempty_list(COMMA, located(typ)), RANGLE))
     { Variable (Position.map (fun s -> Id s) varId, tys) }
-  | constr=located(DATAID) tys=option(delimited(LANGLE, separated_nonempty_list(COMMA, located(typ)), RANGLE)) LPAREN es=separated_list(COMMA, located(expr)) RPAREN
+  | constr=located(DATAID) tys=option(delimited(LANGLE, separated_list(COMMA, located(typ)), RANGLE)) LPAREN es=separated_list(COMMA, located(expr)) RPAREN
     { Tagged (Position.map (fun s -> KId s) constr, tys, es) }
-  | constr=located(DATAID) tys=option(delimited(LANGLE, separated_nonempty_list(COMMA, located(typ)), RANGLE))
+  | constr=located(DATAID) tys=option(delimited(LANGLE, separated_list(COMMA, located(typ)), RANGLE))
     { Tagged (Position.map (fun s -> KId s) constr, tys, []) } %prec CONSTR_NOARG
   | LPAREN RPAREN { Tuple [] }
   | LPAREN e1=located(expr) COMMA e2=located(expr) es=preceded(COMMA, located(expr))* RPAREN
