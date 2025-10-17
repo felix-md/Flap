@@ -3,10 +3,8 @@
   open HopixAST
   open Position
 
-
 %}
 
-//  Avec type
 %token <Mint.t> INT
 %token <string> ID DATAID TVAR STR
 %token <char> CHAR
@@ -25,19 +23,18 @@
 
 %start<HopixAST.t> program
 
+%nonassoc LETSEQ
 %right SEMICOLON
 %right ARROW
 %right AFFECTATION
-%nonassoc ELSE
 %left LOGOR
 %left LOGAND
 %left EQUALITY LESS_OR_EQ GREATER_OR_EQ LESS GREATER
 %left PLUS MINUS
 %left TIMES DIV
 %nonassoc REF EXCLAMATION
-%left DOT
-%left LPAREN
-%left CONJONCTION
+%nonassoc CONSTR_NOARG
+%right LPAREN
 
 %%
 
@@ -122,18 +119,18 @@ record_field:
 
 vdefinition: 
   // let var_id [ : type_scheme ]= expr 
-  | LET id=located(ID) ts=option(preceded(COLON, located(type_scheme))) EQUAL e=located(expr_base) 
-    { SimpleValue (Position.map (fun s -> Id s) id , ts, e) }
+  | LET id=located(ID) ts=option(preceded(COLON, located(type_scheme))) EQUAL e=located(expr) 
+    { SimpleValue (Position.map (fun s -> Id s) id , ts, e) } 
   // fun fundef { and fundef } 
   | FUN fds=separated_nonempty_list(AND, fundef) 
-    { RecFunctions fds }
+    { RecFunctions fds } 
 
 fundef: 
   // [ : type_scheme ] var_id pattern = expr
-  | ts=option(preceded(COLON, located(type_scheme))) id=located(ID) pat=located(pattern) EQUAL e=located(expr_base)
+  | ts=option(preceded(COLON, located(type_scheme))) id=located(ID) pat=located(pattern) EQUAL e=located(expr)
     { 
       (Position.map (fun s -> Id s ) id, ts, FunctionDefinition (pat, e))
-    }
+    } %prec LETSEQ
 
 
 
@@ -197,114 +194,100 @@ pattern_base:
 record_field_pattern:
   | label=located(ID) EQUAL e=located(pattern) {Position.map (fun s -> LId s) label ,e}
 
-expr: 
-// on sépare la séquance des autre expressions
-  | e=expr_seq { e }
-
-
-expr_seq:
-  | e1=located(expr_base) SEMICOLON e2=located(expr_seq)
+expr:
+  | e=simple_expr { e }
+  | LET id=located(ID) ts=option(preceded(COLON, located(type_scheme))) EQUAL e1=located(expr) SEMICOLON e2=located(expr)
+    { Define (SimpleValue (Position.map (fun s -> Id s) id, ts, e1), e2) } %prec LETSEQ
+  | FUN fds=separated_nonempty_list(AND, fundef) SEMICOLON e=located(expr)
+    { Define (RecFunctions fds, e) } %prec LETSEQ
+  | e1=located(expr) SEMICOLON e2=located(expr)
     {
       match Position.value e2 with
       | Sequence es -> Sequence (e1 :: es)
       | _ -> Sequence [e1; e2]
     }
-  | e=expr_base { e }
-
-
-expr_atomic:
-  | n=located(INT) {Literal (Position.map (fun n -> LInt n)n )}
-  | c=located(CHAR) {Literal (Position.map (fun c -> LChar c) c)}
-  | str=located(STR) {Literal (Position.map (fun str -> LString str) str)}
-  | varId=located(ID) tys=option(delimited(LANGLE,separated_nonempty_list(COMMA, located(typ)),RANGLE)) 
-    {Variable (Position.map (fun s -> Id s) varId, tys)}
-  | constr=located(DATAID) tys=option(delimited(LANGLE,separated_nonempty_list(COMMA, located(typ)),RANGLE)) exps=option(delimited(LPAREN,separated_list(COMMA, located(expr)),RPAREN))
-    {
-      let exp = match exps with
-      | None -> []
-      | Some lst -> lst
-      in 
-      
-      
-      Tagged (Position.map (fun s-> KId s) constr, tys, exp)}
-  | LPAREN RPAREN {Tuple []}
-  | LPAREN e1=located(expr) COMMA e2=located(expr) es=preceded(COMMA, located(expr))* RPAREN {Tuple (e1 :: e2 :: es)}
-  | LPAREN e=located(expr) RPAREN {Position.value e}
-  | LCURLYB fields=separated_nonempty_list(COMMA, record_field_expr) RCURLYB tys=option(delimited(LANGLE,separated_nonempty_list(COMMA, located(typ)) ,RANGLE)) 
-    { Record (fields, tys) }
-
-
-expr_field:
-  | e=expr_atomic { e }
-  | e=located(expr_field) DOT label=located(ID) tys=option(delimited(LANGLE,separated_nonempty_list(COMMA, located(typ)) ,RANGLE)) 
-    { Field (e, Position.map (fun s -> LId s) label, tys)}
-
-// Operateurs unaires comme REF et EXCLAMATION
-expr_unary:
-  | e=expr_field { e }
-  | REF e=located(expr_unary) {Ref e}
-  | EXCLAMATION e=located(expr_unary) {Read e}
-
-// Fonction d'application
-expr_app:
-  | e=expr_unary { e }
-  | e1=located(expr_app) e2=located(expr_unary) {Apply (e1,e2)}
-
-// Opérations binaires avec une priorité prédéfinie
-expr_binop:
-  | e=expr_app { e }
-  | e1=located(expr_binop) ope=located(binop) e2=located(expr_app) {
-    Apply (
-      Position.with_pos (Position.position e1)
-      (Apply (
-        Position.with_pos (Position.position ope) (Variable (Position.map (fun s -> Id s) ope, None)),
-        e1
-      )),
-      e2
-    )
-  }
-
-// Les affectations ont la plus basse priorité
-expr_assign:
-  | e=expr_binop { e }
-  | e1=located(expr_binop) AFFECTATION e2=located(expr_assign) {Assign (e1,e2)}
-
-expr_base:
-  | e=expr_assign { e }
-  | vd=vdefinition SEMICOLON e=located(expr_base) {Define (vd,e)}
-  | ANTISLASH p=located(pattern) ARROW e=located(expr_base) {Fun (FunctionDefinition (p,e))}
-  | MATCH LPAREN e=located(expr) RPAREN LCURLYB b=branches RCURLYB {Case (e, b)}
+  | ANTISLASH p=located(pattern) ARROW e=located(expr)
+    { Fun (FunctionDefinition (p, e)) }
+  | MATCH LPAREN e=located(expr) RPAREN LCURLYB b=branches RCURLYB
+    { Case (e, b) }
   | IF LPAREN cond=located(expr) RPAREN THEN LCURLYB trueb=located(expr) RCURLYB falseb=option(preceded(ELSE, delimited(LCURLYB, located(expr), RCURLYB))) {
     match falseb with
     | None -> IfThenElse (cond, trueb, Position.with_pos (Position.position trueb) (Tuple []))
     | Some falseb -> IfThenElse (cond, trueb, falseb)
   }
-  | WHILE LPAREN cond=located(expr) RPAREN LCURLYB body=located(expr) RCURLYB {While (cond,body)}
+  | WHILE LPAREN cond=located(expr) RPAREN LCURLYB body=located(expr) RCURLYB
+    { While (cond, body) }
   | DO LCURLYB body=located(expr) RCURLYB UNTIL LPAREN cond=located(expr) RPAREN {
     let while_expr = Position.with_pos (Position.position cond) (While (cond, body)) in
     Sequence [body; while_expr]
   }
-  | FOR var=located(ID) FROM LPAREN borneinf=located(expr) RPAREN TO LPAREN bornesup=located(expr) RPAREN LCURLYB body=located(expr) RCURLYB {
-    For ((Position.map (fun s -> Id s) var), borneinf, bornesup, body)
+  | FOR var=located(ID) FROM LPAREN borneinf=located(expr) RPAREN TO LPAREN bornesup=located(expr) RPAREN LCURLYB body=located(expr) RCURLYB
+    { For (Position.map (fun s -> Id s) var, borneinf, bornesup, body) }
+  | LPAREN e=located(expr) COLON t=located(typ) RPAREN
+    { TypeAnnotation (e, t) }
+  | lhs=located(simple_expr) AFFECTATION rhs=located(expr)
+    { Assign (lhs, rhs) }
+  | left=located(expr) op=located(binop) right=located(expr)
+    {
+    
+
+      let op_var =
+        Position.with_pos (Position.position op)
+          (Variable (op, None))
+      in
+      let applied_left =
+        Position.with_pos (Position.position left)
+          (Apply (op_var, left))
+      in
+        (Apply (applied_left, right))
+    
   }
-  | LPAREN e=located(expr) COLON t=located(typ) RPAREN {TypeAnnotation (e, t)}
+    
+  | REF e=located(expr)
+    { Ref e } 
 
-binop:
-  | PLUS {"+"}
-  | MINUS { "-" }
-  | TIMES { "*" }
-  | DIV { "/" }
-  | LOGAND { "&&" }
-  | LOGOR { "||" }
-  | EQUALITY { "=?" }
-  | LESS_OR_EQ { "<=?" }
-  | GREATER_OR_EQ { ">=?" }
-  | LESS { "<?" }
-  | GREATER { ">?" }
+simple_expr:
+  | a=atomic_expr { a }
+  
+  | EXCLAMATION e=located(atomic_expr)
+    { Read e }
+  | f=located(simple_expr) arg=located(atomic_expr)
+    { Apply (f, arg) }
+  | f=located(simple_expr) DOT label=located(ID) tys=option(delimited(LANGLE, separated_nonempty_list(COMMA, located(typ)), RANGLE))
+    { Field (f, Position.map (fun s -> LId s) label, tys) }
 
+atomic_expr:
+  | n=located(INT) { Literal (Position.map (fun n -> LInt n) n) }
+  | c=located(CHAR) { Literal (Position.map (fun c -> LChar c) c) }
+  | str=located(STR) { Literal (Position.map (fun str -> LString str) str) }
+  | varId=located(ID) tys=option(delimited(LANGLE, separated_nonempty_list(COMMA, located(typ)), RANGLE))
+    { Variable (Position.map (fun s -> Id s) varId, tys) }
+  | constr=located(DATAID) tys=option(delimited(LANGLE, separated_nonempty_list(COMMA, located(typ)), RANGLE)) LPAREN es=separated_list(COMMA, located(expr)) RPAREN
+    { Tagged (Position.map (fun s -> KId s) constr, tys, es) }
+  | constr=located(DATAID) tys=option(delimited(LANGLE, separated_nonempty_list(COMMA, located(typ)), RANGLE))
+    { Tagged (Position.map (fun s -> KId s) constr, tys, []) } %prec CONSTR_NOARG
+  | LPAREN RPAREN { Tuple [] }
+  | LPAREN e1=located(expr) COMMA e2=located(expr) es=preceded(COMMA, located(expr))* RPAREN
+    { Tuple (e1 :: e2 :: es) }
+  | LPAREN e=located(expr) RPAREN { Position.value e }
+  | LCURLYB fields=separated_nonempty_list(COMMA, record_field_expr) RCURLYB tys=option(delimited(LANGLE, separated_nonempty_list(COMMA, located(typ)), RANGLE))
+    { Record (fields, tys) }
+
+%inline binop:
+  | PLUS { Id "`+`" }
+  | MINUS { Id "`-`" }
+  | TIMES { Id "`*`" }
+  | DIV { Id "`/`" }
+  | LOGAND { Id "`&&`" }
+  | LOGOR { Id "`||`" }
+  | EQUALITY { Id "`=?`" }
+  | LESS_OR_EQ { Id "`<=?`" }
+  | GREATER_OR_EQ { Id "`>=?`" }
+  | LESS { Id "`<?`" }
+  | GREATER { Id "`>?`"  }
 
 branche:
-  | p=located(pattern) ARROW e=located(expr_base)
+  | p=located(pattern) ARROW e=located(expr)
   {Position.with_pos (Position.position p) (Branch (p,e))}
 
 branches:
