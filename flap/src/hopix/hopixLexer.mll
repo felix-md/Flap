@@ -20,37 +20,14 @@
     | "\\r" -> '\r'
     | "\\\\" -> '\\'
     | "\\'" -> '\''
-    (* match "\digit digit digit" to '\digit digit digit' *)
     | _ when String.length s > 3 && s.[0] = '\\' && s.[1] = '0' && s.[2] = 'x' ->
         let hex = String.sub s 3 2 in
         Char.chr (int_of_string ("0x" ^ hex))
     | _ when String.length s = 1 -> s.[0]
+    (* Char de la forme '\000'*)
     | _ when String.length s = 4 && s.[0] == '\\' ->
         Char.chr (int_of_string (String.sub s 1 3))
     | _ -> failwith "Invalid escape sequence"
-
-  (* Fonction pour interpréter une string *)
-  let interpret_string s =
-    let buf = Buffer.create (String.length s) in
-    let rec loop i =
-      if i >= String.length s then Buffer.contents buf
-      else if s.[i] = '\\' && i + 1 < String.length s then
-        match s.[i+1] with
-        | 'n' -> Buffer.add_char buf '\n'; loop (i+2)
-        | 't' -> Buffer.add_char buf '\t'; loop (i+2)
-        | 'b' -> Buffer.add_char buf '\b'; loop (i+2)
-        | 'r' -> Buffer.add_char buf '\r'; loop (i+2)
-        | '\\' -> Buffer.add_char buf '\\'; loop (i+2)
-        | '"' -> Buffer.add_char buf '"'; loop (i+2)
-        | '\'' -> Buffer.add_char buf '\''; loop (i+2)
-        | '0' when i + 4 < String.length s && s.[i+2] = 'x' ->
-            let hex = String.sub s (i+3) 2 in
-            Buffer.add_char buf (Char.chr (int_of_string ("0x" ^ hex)));
-            loop (i+5)
-        | _ -> Buffer.add_char buf s.[i]; loop (i+1)
-      else (Buffer.add_char buf s.[i]; loop (i+1))
-    in loop 0
-  
 
 }
 
@@ -113,10 +90,6 @@ let atom_s =
 
 
 let char = "\'" atom "\'"
-
-(* string qui utilise atom_s *)
-let string = '"' ((atom_s | ''' |'\"') ) * '"'
-
 
 let single_line_comment = "##" [^ '\010' '\013']* newline
 
@@ -193,12 +166,8 @@ rule token = parse
       let content = String.sub s 1 (String.length s - 2) in
       CHAR (interpret_char content)
     }
-  | string {
-      let s = Lexing.lexeme lexbuf in
-      (* Enlève les guillemets *)
-      let content = String.sub s 1 (String.length s - 2) in
-      STR (interpret_string content)
-  }
+  (* Reconnait une chaîne string et renvoie une erreur si la string est mal formée *)
+  | '"' { read_string (Buffer.create 16) lexbuf }
   
  
   (* Layout *)
@@ -207,9 +176,31 @@ rule token = parse
   | eof             { EOF       }
 
   (* Lexing error. *)
-  | _ as c            { error lexbuf ("unexpected character : " ^ (String.make 1 c)) }
+  | _ as c            { error lexbuf ("Error (lexing)\nunexpected character.") }
 
-
+and read_string buf = parse
+  (* Fin de la string *)
+  | '"'       { STR (Buffer.contents buf) }
+  (* Cas d'erreur : string non fermée *)
+  | eof       { error lexbuf "Unterminated string." }
+  | '\\' 'n'  { Buffer.add_char buf '\n'; read_string buf lexbuf }
+  | '\\' 't'  { Buffer.add_char buf '\t'; read_string buf lexbuf }
+  | '\\' 'b'  { Buffer.add_char buf '\b'; read_string buf lexbuf }
+  | '\\' 'r'  { Buffer.add_char buf '\r'; read_string buf lexbuf }
+  | '\\' '\\' { Buffer.add_char buf '\\'; read_string buf lexbuf }
+  | '\\' '"'  { Buffer.add_char buf '"'; read_string buf lexbuf }
+  | '\\' '\'' { Buffer.add_char buf '\''; read_string buf lexbuf }
+  | '\\' '0' 'x' (hexdigit hexdigit as hex)
+      { Buffer.add_char buf (Char.chr (int_of_string ("0x" ^ hex)));
+        read_string buf lexbuf }
+  | '\\' (['0'-'1'] ['0'-'9'] ['0'-'9'] as digits)
+      { Buffer.add_char buf (Char.chr (int_of_string digits));
+        read_string buf lexbuf }
+  | '\\' '2' (['0'-'5'] ['0'-'5'] as digits)
+      { Buffer.add_char buf (Char.chr (int_of_string ("2" ^ digits)));
+        read_string buf lexbuf }
+  | newline   { next_line_and (read_string buf) lexbuf }
+  | _ as c    { Buffer.add_char buf c; read_string buf lexbuf }
 
 and comment = parse
   | "*}"           { token lexbuf }
