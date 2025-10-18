@@ -25,6 +25,7 @@
 
 %nonassoc LETSEQ
 %right SEMICOLON
+%left FUNDEF
 %right ARROW
 %right AFFECTATION
 %left LOGOR
@@ -32,7 +33,7 @@
 %left EQUALITY LESS_OR_EQ GREATER_OR_EQ LESS GREATER
 %left PLUS MINUS
 %left TIMES DIV
-%nonassoc REF EXCLAMATION
+%nonassoc REF 
 %nonassoc CONSTR_NOARG
 %right LPAREN
 
@@ -43,7 +44,7 @@ program: defs=located(definition)* EOF { defs }
 
 definition:
   // type type_con [ < type_variable { , type_variable } > ] [ = tdefinition ] 
-  | TYPE tcon=located(DATAID) tvars=type_params? td=type_definition? 
+  | TYPE tcon=located(ID) tvars=type_params? td=type_definition? 
     { 
       DefineType (
         Position.map (fun s -> TCon s) tcon ,
@@ -66,15 +67,15 @@ type_definition:
 
 tdefinition:
   // [ | ] constr_id [ ( type { , type } ) ]  { | constr_id [ ( type { , type } ) ] }
-  | PIPE? cases=separated_nonempty_list(PIPE, sum_type_case)
-    { DefineSumType cases }
+  | PIPE? fst=sum_type_case cases=preceded(PIPE, sum_type_case)*
+    { DefineSumType (fst::cases) }
   // { label_id : type { , label_id : type } } 
   | LCURLYB fields=separated_nonempty_list(COMMA, record_field) RCURLYB
     { DefineRecordType fields }
 
 typ:
   // typ -> typ
-  | t=located(typ_atom) ARROW t2=located(typ)
+  | t=located(typ) ARROW t2=located(typ)
     { TyArrow (t, t2) }
   // type * type {* type}
   | t=located(typ_tuple)
@@ -110,7 +111,7 @@ typ_atom:
 
 sum_type_case:
   // constr_id [ ( type { , type } ) ] 
- | constr=located(DATAID) typs=delimited(LPAREN, separated_list(COMMA, located(typ)),RPAREN){(Position.map (fun s -> KId s) constr, typs )}
+ | constr=located(DATAID) typs=option(delimited(LPAREN, separated_list(COMMA, located(typ)),RPAREN)){(Position.map (fun s -> KId s) constr,Option.value ~default:[] typs )}
 
 record_field:
   // label_id : type
@@ -122,15 +123,16 @@ vdefinition:
   | LET id=located(ID) ts=option(preceded(COLON, located(type_scheme))) EQUAL e=located(expr) 
     { SimpleValue (Position.map (fun s -> Id s) id , ts, e) } 
   // fun fundef { and fundef } 
-  | FUN fds=separated_nonempty_list(AND, fundef) 
-    { RecFunctions fds } 
+  | FUN fst=fundef fds=preceded(AND, fundef)*
+    { RecFunctions (fst::fds) } 
+
 
 fundef: 
   // [ : type_scheme ] var_id pattern = expr
   | ts=option(preceded(COLON, located(type_scheme))) id=located(ID) pat=located(pattern) EQUAL e=located(expr)
     { 
       (Position.map (fun s -> Id s ) id, ts, FunctionDefinition (pat, e))
-    } %prec SEMICOLON
+    } %prec FUNDEF 
 
 
 
@@ -261,7 +263,7 @@ atomic_expr:
   | str=located(STR) { Literal (Position.map (fun str -> LString str) str) }
   | varId=located(ID) tys=option(delimited(LANGLE, separated_nonempty_list(COMMA, located(typ)), RANGLE))
     { Variable (Position.map (fun s -> Id s) varId, tys) }
-  | constr=located(DATAID) tys=option(delimited(LANGLE, separated_list(COMMA, located(typ)), RANGLE)) LPAREN es=separated_list(COMMA, located(expr)) RPAREN
+  | constr=located(DATAID) tys=option(delimited(LANGLE, separated_list(COMMA, located(typ)), RANGLE)) LPAREN es=separated_nonempty_list(COMMA, located(expr)) RPAREN
     { Tagged (Position.map (fun s -> KId s) constr, tys, es) }
   | constr=located(DATAID) tys=option(delimited(LANGLE, separated_list(COMMA, located(typ)), RANGLE))
     { Tagged (Position.map (fun s -> KId s) constr, tys, []) } %prec CONSTR_NOARG
