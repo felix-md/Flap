@@ -258,7 +258,7 @@ atomic_expr:
 
   | LPAREN e1=located(expr) COMMA e2=located(expr) es=preceded(COMMA, located(expr))* RPAREN
     { Tuple (e1 :: e2 :: es) }
-  | LPAREN e=located(expr) RPAREN { Position.value e }
+  | LPAREN e=expr RPAREN { e }
   | LCURLYB fields=separated_nonempty_list(COMMA, record_field_expr) RCURLYB tys=option(delimited(LANGLE, separated_nonempty_list(COMMA, located(typ)), RANGLE))
     { Record (fields, tys) }
 
