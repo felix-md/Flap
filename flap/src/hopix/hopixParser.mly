@@ -130,7 +130,7 @@ fundef:
   | ts=option(preceded(COLON, located(type_scheme))) id=located(ID) pat=located(pattern) EQUAL e=located(expr)
     { 
       (Position.map (fun s -> Id s ) id, ts, FunctionDefinition (pat, e))
-    }
+    } %prec SEMICOLON
 
 
 
