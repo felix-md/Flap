@@ -3,6 +3,7 @@
   open HopixAST
   open Position
 
+
 %}
 
 %token <Mint.t> INT
@@ -33,6 +34,8 @@
 %left EQUALITY LESS_OR_EQ GREATER_OR_EQ LESS GREATER
 %left PLUS MINUS
 %left TIMES DIV
+%left PIPE
+%left CONJONCTION
 %nonassoc REF 
 %nonassoc CONSTR_NOARG
 %right LPAREN
@@ -44,7 +47,7 @@ program: defs=located(definition)* EOF { defs }
 
 definition:
   // type type_con [ < type_variable { , type_variable } > ] [ = tdefinition ] 
-  | TYPE tcon=located(ID) tvars=type_params? td=type_definition? 
+  | TYPE tcon=located(ID) tvars=type_params? td=option(preceded(EQUAL,tdefinition))
     { 
       DefineType (
         Position.map (fun s -> TCon s) tcon ,
@@ -62,8 +65,6 @@ type_params:
   // < type_variable { , type_variable } >
   | LANGLE tvs=separated_list(COMMA, located(TVAR)) RANGLE { tvs }
 
-type_definition:
-  | EQUAL td=tdefinition { td }
 
 tdefinition:
   // [ | ] constr_id [ ( type { , type } ) ]  { | constr_id [ ( type { , type } ) ] }
@@ -78,27 +79,17 @@ typ:
   | t=located(typ) ARROW t2=located(typ)
     { TyArrow (t, t2) }
   // type * type {* type}
-  | t=located(typ_tuple)
-    { Position.value t }
+  | t=typ_tuple
+    { t }
   // ceux qu'on coupe pas
   | t=typ_atom
     { t }
 
-typ_in_pattern:
-  | tcon=ID typs=loption(delimited(LANGLE, separated_nonempty_list(COMMA, located(typ)), RANGLE))
-    { TyCon (TCon tcon, typs) }  
-  | tv=TVAR
-    { TyVar (TId tv) }  
-  | LPAREN t=typ RPAREN { t }  
+
 typ_tuple:
     // au moins 2
-  | t1=located(typ_atom) TIMES t2=located(typ_atom) ts=tuple_rest
+  | t1=located(typ_atom) TIMES t2=located(typ_atom) ts=preceded(TIMES,located(typ_atom))*
     { TyTuple (t1 :: t2 :: ts) }
-
-// Modifié pour éviter les conflits shift/reduce avec TIMES
-tuple_rest:
-  | /* empty */ { [] }
-  | TIMES t=located(typ_atom) ts=tuple_rest { t :: ts }
 
 typ_atom:
   // type_con [ < type { , type } > ]
@@ -107,21 +98,22 @@ typ_atom:
   // type_variable
   | tv=TVAR
     { TyVar (TId tv) }
-  | LPAREN t=located(typ) RPAREN { Position.value t } 
+  | LPAREN t=typ RPAREN { t } 
 
 sum_type_case:
   // constr_id [ ( type { , type } ) ] 
- | constr=located(DATAID) typs=option(delimited(LPAREN, separated_list(COMMA, located(typ)),RPAREN)){(Position.map (fun s -> KId s) constr,Option.value ~default:[] typs )}
+ | constr=located(DATAID) typs=option(delimited(LPAREN, separated_list(COMMA, located(typ)),RPAREN))
+  {(Position.map (fun s -> KId s) constr,Option.value ~default:[] typs )}
 
 record_field:
   // label_id : type
   | id=located(ID) COLON ty=located(typ)
     { (Position.map (fun s -> LId s ) id, ty) }
 
-vdefinition: 
+ %inline vdefinition: 
   // let var_id [ : type_scheme ]= expr 
   | LET id=located(ID) ts=option(preceded(COLON, located(type_scheme))) EQUAL e=located(expr) 
-    { SimpleValue (Position.map (fun s -> Id s) id , ts, e) } 
+    { SimpleValue (Position.map (fun s -> Id s) id , ts, e) }
   // fun fundef { and fundef } 
   | FUN fst=fundef fds=preceded(AND, fundef)*
     { RecFunctions (fst::fds) } 
@@ -149,19 +141,15 @@ type_variable:
 
 pattern:
   // division des or et and
-  | p=pattern_or { p }
 
-pattern_or:
-  | p1=located(pattern_and) PIPE p2=located(pattern_or)
+  | p1=located(pattern) PIPE p2=located(pattern)
     { 
       match Position.value p2 with
       | POr ps -> POr (p1 :: ps)
       | _ -> POr [p1; p2]
     }
-  | p=pattern_and { p }
 
-pattern_and:
-  | p1=located(pattern_base) CONJONCTION p2=located(pattern_and)
+  | p1=located(pattern) CONJONCTION p2=located(pattern)
     {
       match Position.value p2 with
       | PAnd ps -> PAnd (p1 :: ps)
@@ -172,6 +160,8 @@ pattern_and:
 pattern_base:
   // dans base les patterns "atomiques"
   | var=located(ID) {PVariable (Position.map (fun e -> Id e) var)}
+  | n=located(INT) {PLiteral (Position.map (fun n -> LInt n) n )}
+  | c=located(CHAR) {PLiteral (Position.map (fun c -> LChar c) c)}
   | UNDERSCORE {PWildcard}
   | LPAREN pats=separated_list(COMMA, located(pattern)) RPAREN {
     match pats with
@@ -179,13 +169,10 @@ pattern_base:
     | [p] -> Position.value p 
     | _ -> PTuple pats
   }
-  | p=located(pattern_base) COLON ty=located(typ_in_pattern) {
+  | p=located(pattern_base) COLON ty=located(typ_atom) {
     PTypeAnnotation (p,ty)
   }
 
-  |n=located(INT) {PLiteral (Position.map (fun n -> LInt n) n )}
-
-  |c=located(CHAR) {PLiteral (Position.map (fun c -> LChar c) c)}
 
   | str=located(STR) {PLiteral (Position.map (fun str -> LString str) str)}
   | constr=located(DATAID) types=option(delimited(LANGLE, separated_list(COMMA, located(typ)),RANGLE)) pats=loption(delimited(LPAREN, separated_nonempty_list(COMMA, located(pattern)),RPAREN)) {
@@ -198,10 +185,8 @@ record_field_pattern:
 
 expr:
   | e=simple_expr { e }
-  | LET id=located(ID) ts=option(preceded(COLON, located(type_scheme))) EQUAL e1=located(expr) SEMICOLON e2=located(expr)
-    { Define (SimpleValue (Position.map (fun s -> Id s) id, ts, e1), e2) } %prec LETSEQ
-  | FUN fds=separated_nonempty_list(AND, fundef) SEMICOLON e=located(expr)
-    { Define (RecFunctions fds, e) } %prec LETSEQ
+  | vd=vdefinition SEMICOLON e=located(expr)
+    { Define (vd, e) } %prec LETSEQ
   | e1=located(expr) SEMICOLON e2=located(expr)
     {
       (* Associativité à droite pour les séquences *)
@@ -263,11 +248,14 @@ atomic_expr:
   | str=located(STR) { Literal (Position.map (fun str -> LString str) str) }
   | varId=located(ID) tys=option(delimited(LANGLE, separated_nonempty_list(COMMA, located(typ)), RANGLE))
     { Variable (Position.map (fun s -> Id s) varId, tys) }
+
   | constr=located(DATAID) tys=option(delimited(LANGLE, separated_list(COMMA, located(typ)), RANGLE)) LPAREN es=separated_nonempty_list(COMMA, located(expr)) RPAREN
     { Tagged (Position.map (fun s -> KId s) constr, tys, es) }
+
   | constr=located(DATAID) tys=option(delimited(LANGLE, separated_list(COMMA, located(typ)), RANGLE))
     { Tagged (Position.map (fun s -> KId s) constr, tys, []) } %prec CONSTR_NOARG
   | LPAREN RPAREN { Tuple [] }
+
   | LPAREN e1=located(expr) COMMA e2=located(expr) es=preceded(COMMA, located(expr))* RPAREN
     { Tuple (e1 :: e2 :: es) }
   | LPAREN e=located(expr) RPAREN { Position.value e }
