@@ -176,7 +176,7 @@ rule token = parse
   | eof             { EOF       }
 
   (* Lexing error. *)
-  | _ as c            { error lexbuf ("Error (lexing)\nunexpected character.") }
+  | _             { error lexbuf ("Error (lexing)\nunexpected character.") }
 
 and read_string buf = parse
   (* Fin de la string *)

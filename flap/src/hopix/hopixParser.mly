@@ -24,7 +24,6 @@
 
 %start<HopixAST.t> program
 
-%nonassoc LETSEQ
 %right SEMICOLON
 %left FUNDEF
 %right ARROW
@@ -46,102 +45,75 @@
 program: defs=located(definition)* EOF { defs }
 
 definition:
-  // type type_con [ < type_variable { , type_variable } > ] [ = tdefinition ] 
   | TYPE tcon=located(ID) tvars=type_params? td=option(preceded(EQUAL,tdefinition))
     { 
       DefineType (
-        Position.map (fun s -> TCon s) tcon ,
-        List.map (Position.map (fun s -> TId s)) (Option.value ~default:[] tvars), 
+        map (fun s -> TCon s) tcon ,
+        List.map (map (fun s -> TId s)) (Option.value ~default:[] tvars), 
         Option.value ~default:Abstract td)
     }
-  // extern var_id : type_scheme
   | EXTERN id=located(ID) COLON ts=located(type_scheme)
-    { DeclareExtern (Position.map (fun id -> Id id) id, ts) }
-  // vdefinition
+    { DeclareExtern (map (fun id -> Id id) id, ts) }
   | vd=vdefinition
-    {DefineValue vd}
+    { DefineValue vd }
 
 type_params:
-  // < type_variable { , type_variable } >
-  | LANGLE tvs=separated_list(COMMA, located(TVAR)) RANGLE { tvs }
-
+  | LANGLE tvs=separated_list(COMMA, located(TVAR)) RANGLE 
+    { tvs }
 
 tdefinition:
-  // [ | ] constr_id [ ( type { , type } ) ]  { | constr_id [ ( type { , type } ) ] }
   | PIPE? fst=sum_type_case cases=preceded(PIPE, sum_type_case)*
     { DefineSumType (fst::cases) }
-  // { label_id : type { , label_id : type } } 
   | LCURLYB fields=separated_nonempty_list(COMMA, record_field) RCURLYB
     { DefineRecordType fields }
 
 typ:
-  // typ -> typ
   | t=located(typ) ARROW t2=located(typ)
     { TyArrow (t, t2) }
-  // type * type {* type}
   | t=typ_tuple
     { t }
-  // ceux qu'on coupe pas
   | t=typ_atom
     { t }
 
-
 typ_tuple:
-    // au moins 2
   | t1=located(typ_atom) TIMES t2=located(typ_atom) ts=preceded(TIMES,located(typ_atom))*
     { TyTuple (t1 :: t2 :: ts) }
 
 typ_atom:
-  // type_con [ < type { , type } > ]
   | tcon=ID typs=loption(delimited(LANGLE, separated_nonempty_list(COMMA, located(typ)), RANGLE))
     { TyCon (TCon tcon, typs) }
-  // type_variable
   | tv=TVAR
     { TyVar (TId tv) }
-  | LPAREN t=typ RPAREN { t } 
+  | LPAREN t=typ RPAREN 
+    { t } 
 
 sum_type_case:
-  // constr_id [ ( type { , type } ) ] 
- | constr=located(DATAID) typs=option(delimited(LPAREN, separated_list(COMMA, located(typ)),RPAREN))
-  {(Position.map (fun s -> KId s) constr,Option.value ~default:[] typs )}
+  | constr=located(DATAID) typs=option(delimited(LPAREN, separated_list(COMMA, located(typ)),RPAREN))
+    { (map (fun s -> KId s) constr,Option.value ~default:[] typs ) }
 
 record_field:
-  // label_id : type
   | id=located(ID) COLON ty=located(typ)
-    { (Position.map (fun s -> LId s ) id, ty) }
+    { (map (fun s -> LId s ) id, ty) }
 
  %inline vdefinition: 
-  // let var_id [ : type_scheme ]= expr 
   | LET id=located(ID) ts=option(preceded(COLON, located(type_scheme))) EQUAL e=located(expr) 
-    { SimpleValue (Position.map (fun s -> Id s) id , ts, e) }
-  // fun fundef { and fundef } 
+    { SimpleValue (map (fun s -> Id s) id , ts, e) }
   | FUN fst=fundef fds=preceded(AND, fundef)*
     { RecFunctions (fst::fds) } 
 
-
 fundef: 
-  // [ : type_scheme ] var_id pattern = expr
   | ts=option(preceded(COLON, located(type_scheme))) id=located(ID) pat=located(pattern) EQUAL e=located(expr)
-    { 
-      (Position.map (fun s -> Id s ) id, ts, FunctionDefinition (pat, e))
-    } %prec FUNDEF 
-
-
-
+    { (map (fun s -> Id s ) id, ts, FunctionDefinition (pat, e)) } %prec FUNDEF 
 
 type_scheme: 
-  // [ [ type_variable { , type_variable } ] ] type
   | typvars=loption(delimited(LSQUAREB, separated_nonempty_list(COMMA, type_variable), RSQUAREB)) ty=located(typ)
-  {
-    ForallTy (typvars, ty)
-  }
+    { ForallTy (typvars, ty) }
 
 type_variable:
-  | tv=located(TVAR) { Position.map (fun s -> TId s) tv}
+  | tv=located(TVAR) 
+    { map (fun s -> TId s) tv}
 
 pattern:
-  // division des or et and
-
   | p1=located(pattern) PIPE p2=located(pattern)
     { 
       match Position.value p2 with
@@ -155,68 +127,70 @@ pattern:
       | PAnd ps -> PAnd (p1 :: ps)
       | _ -> PAnd [p1; p2]
     }
-  | p=pattern_base { p }
+  | p=pattern_base 
+    { p }
 
 pattern_base:
-  // dans base les patterns "atomiques"
-  | var=located(ID) {PVariable (Position.map (fun e -> Id e) var)}
-  | n=located(INT) {PLiteral (Position.map (fun n -> LInt n) n )}
-  | c=located(CHAR) {PLiteral (Position.map (fun c -> LChar c) c)}
-  | UNDERSCORE {PWildcard}
-  | LPAREN pats=separated_list(COMMA, located(pattern)) RPAREN {
-    match pats with
-    | [] -> PTuple []
-    | [p] -> Position.value p 
-    | _ -> PTuple pats
-  }
-  | p=located(pattern_base) COLON ty=located(typ_atom) {
-    PTypeAnnotation (p,ty)
-  }
-
-
-  | str=located(STR) {PLiteral (Position.map (fun str -> LString str) str)}
-  | constr=located(DATAID) types=option(delimited(LANGLE, separated_list(COMMA, located(typ)),RANGLE)) pats=loption(delimited(LPAREN, separated_nonempty_list(COMMA, located(pattern)),RPAREN)) {
-    PTaggedValue (Position.map (fun c -> KId c) constr, types, pats)
-  }
-  | LCURLYB fields=separated_nonempty_list(COMMA, record_field_pattern) RCURLYB tys=option(delimited(LANGLE,separated_nonempty_list(COMMA, located(typ)) ,RANGLE)) { PRecord (fields,tys)}  
+  | var=located(ID) 
+    { PVariable (map (fun e -> Id e) var) }
+  | n=located(INT) 
+    { PLiteral (map (fun n -> LInt n) n ) }
+  | c=located(CHAR) 
+    { PLiteral (map (fun c -> LChar c) c) }
+  | UNDERSCORE 
+    { PWildcard }
+  | LPAREN pats=separated_list(COMMA, located(pattern)) RPAREN 
+    {
+      match pats with
+      | [] -> PTuple []
+      | [p] -> Position.value p 
+      | _ -> PTuple pats
+    }
+  | p=located(pattern_base) COLON ty=located(typ_atom) 
+    { PTypeAnnotation (p,ty) }
+  | str=located(STR) 
+    { PLiteral (map (fun str -> LString str) str)}
+  | constr=located(DATAID) types=option(delimited(LANGLE, separated_list(COMMA, located(typ)),RANGLE)) pats=loption(delimited(LPAREN, separated_nonempty_list(COMMA, located(pattern)),RPAREN)) 
+    { PTaggedValue (map (fun c -> KId c) constr, types, pats) }
+  | LCURLYB fields=separated_nonempty_list(COMMA, record_field_pattern) RCURLYB tys=option(delimited(LANGLE,separated_nonempty_list(COMMA, located(typ)) ,RANGLE)) 
+    { PRecord (fields,tys)}  
 
 record_field_pattern:
-  | label=located(ID) EQUAL e=located(pattern) {Position.map (fun s -> LId s) label ,e}
+  | label=located(ID) EQUAL e=located(pattern) 
+    { map (fun s -> LId s) label ,e }
 
 expr:
-  | e=simple_expr { e }
+  | e=simple_expr 
+    { e }
   | vd=vdefinition SEMICOLON e=located(expr)
-    { Define (vd, e) } %prec LETSEQ
+    { Define (vd, e) } 
   | e1=located(expr) SEMICOLON e2=located(expr)
-    {
-      (* Associativité à droite pour les séquences *)
-      Sequence [e1; e2]
-    }
+    { Sequence [e1; e2] }
   | ANTISLASH p=located(pattern) ARROW e=located(expr)
     { Fun (FunctionDefinition (p, e)) }
   | MATCH LPAREN e=located(expr) RPAREN LCURLYB b=branches RCURLYB
     { Case (e, b) }
-  | IF LPAREN cond=located(expr) RPAREN THEN LCURLYB trueb=located(expr) RCURLYB falseb=option(preceded(ELSE, delimited(LCURLYB, located(expr), RCURLYB))) {
-    match falseb with
-    | None -> IfThenElse (cond, trueb, Position.with_pos (Position.position trueb) (Tuple []))
-    | Some falseb -> IfThenElse (cond, trueb, falseb)
-  }
+  | IF LPAREN cond=located(expr) RPAREN THEN LCURLYB trueb=located(expr) RCURLYB falseb=option(preceded(ELSE, delimited(LCURLYB, located(expr), RCURLYB))) 
+    {
+      match falseb with
+      | None -> IfThenElse (cond, trueb, Position.with_pos (Position.position trueb) (Tuple []))
+      | Some falseb -> IfThenElse (cond, trueb, falseb)
+    }
   | WHILE LPAREN cond=located(expr) RPAREN LCURLYB body=located(expr) RCURLYB
     { While (cond, body) }
-  | DO LCURLYB body=located(expr) RCURLYB UNTIL LPAREN cond=located(expr) RPAREN {
-    let while_expr = Position.with_pos (Position.position cond) (While (cond, body)) in
-    Sequence [body; while_expr]
-  }
+  | DO LCURLYB body=located(expr) RCURLYB UNTIL LPAREN cond=located(expr) RPAREN 
+    {
+      let while_expr = Position.with_pos (Position.position cond) (While (cond, body)) in
+      Sequence [body; while_expr]
+    }
   | FOR var=located(ID) FROM LPAREN borneinf=located(expr) RPAREN TO LPAREN bornesup=located(expr) RPAREN LCURLYB body=located(expr) RCURLYB
-    { For (Position.map (fun s -> Id s) var, borneinf, bornesup, body) }
+    { For (map (fun s -> Id s) var, borneinf, bornesup, body) }
   | LPAREN e=located(expr) COLON t=located(typ) RPAREN
     { TypeAnnotation (e, t) }
   | lhs=located(simple_expr) AFFECTATION rhs=located(expr)
     { Assign (lhs, rhs) }
   | left=located(expr) op=located(binop) right=located(expr)
     {
-    
-
       let op_var =
         Position.with_pos (Position.position op)
           (Variable (op, None))
@@ -226,39 +200,40 @@ expr:
           (Apply (op_var, left))
       in
         (Apply (applied_left, right))
-    
-  }
-    
+    }
   | REF e=located(expr)
     { Ref e } 
 
 simple_expr:
-  | a=atomic_expr { a }
-  
+  | a=atomic_expr 
+    { a }
   | EXCLAMATION e=located(atomic_expr)
     { Read e }
   | f=located(simple_expr) arg=located(atomic_expr)
     { Apply (f, arg) }
   | f=located(simple_expr) DOT label=located(ID) tys=option(delimited(LANGLE, separated_nonempty_list(COMMA, located(typ)), RANGLE))
-    { Field (f, Position.map (fun s -> LId s) label, tys) }
+    { Field (f, map (fun s -> LId s) label, tys) }
 
 atomic_expr:
-  | n=located(INT) { Literal (Position.map (fun n -> LInt n) n) }
-  | c=located(CHAR) { Literal (Position.map (fun c -> LChar c) c) }
-  | str=located(STR) { Literal (Position.map (fun str -> LString str) str) }
+  | n=located(INT) 
+    { Literal (map (fun n -> LInt n) n) }
+  | c=located(CHAR) 
+    { Literal (map (fun c -> LChar c) c) }
+  | str=located(STR) 
+    { Literal (map (fun str -> LString str) str) }
   | varId=located(ID) tys=option(delimited(LANGLE, separated_nonempty_list(COMMA, located(typ)), RANGLE))
-    { Variable (Position.map (fun s -> Id s) varId, tys) }
+    { Variable (map (fun s -> Id s) varId, tys) }
 
   | constr=located(DATAID) tys=option(delimited(LANGLE, separated_list(COMMA, located(typ)), RANGLE)) LPAREN es=separated_nonempty_list(COMMA, located(expr)) RPAREN
-    { Tagged (Position.map (fun s -> KId s) constr, tys, es) }
-
+    { Tagged (map (fun s -> KId s) constr, tys, es) }
   | constr=located(DATAID) tys=option(delimited(LANGLE, separated_list(COMMA, located(typ)), RANGLE))
-    { Tagged (Position.map (fun s -> KId s) constr, tys, []) } %prec CONSTR_NOARG
-  | LPAREN RPAREN { Tuple [] }
-
+    { Tagged (map (fun s -> KId s) constr, tys, []) } %prec CONSTR_NOARG
+  | LPAREN RPAREN 
+    { Tuple [] }
   | LPAREN e1=located(expr) COMMA e2=located(expr) es=preceded(COMMA, located(expr))* RPAREN
     { Tuple (e1 :: e2 :: es) }
-  | LPAREN e=expr RPAREN { e }
+  | LPAREN e=expr RPAREN 
+    { e }
   | LCURLYB fields=separated_nonempty_list(COMMA, record_field_expr) RCURLYB tys=option(delimited(LANGLE, separated_nonempty_list(COMMA, located(typ)), RANGLE))
     { Record (fields, tys) }
 
@@ -277,13 +252,15 @@ atomic_expr:
 
 branche:
   | p=located(pattern) ARROW e=located(expr)
-  {Position.with_pos (Position.position p) (Branch (p,e))}
+    { Position.with_pos (Position.position p) (Branch (p,e)) }
 
 branches:
-  | PIPE? b=branche bs=preceded(PIPE,branche)* { b::bs }
+  | PIPE? b=branche bs=preceded(PIPE,branche)* 
+    { b::bs }
 
 record_field_expr:
-  | label=located(ID) EQUAL e=located(expr) {Position.map (fun s -> LId s) label ,e}
+  | label=located(ID) EQUAL e=located(expr) 
+    { map (fun s -> LId s) label ,e}
 
 %inline located(X): x=X {
   Position.with_poss $startpos $endpos x
