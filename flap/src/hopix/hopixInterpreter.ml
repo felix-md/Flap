@@ -367,7 +367,9 @@ and expression pos environment memory =
     apply_expr e1 e2 environment memory pos
   | Variable (id, _) ->
     Environment.lookup pos (Position.value id) environment 
-  | Tagged _ -> error [pos] "Read evaluation not implemented yet"
+  | Tagged (cons, ty, expr) -> 
+    let vlist = List.map (expression' environment memory) expr in
+    VTagged (Position.value cons, vlist)
   | Record _ -> error [pos] "Record evaluation not implemented yet"
   | Field _ -> error [pos] "Field evaluation not implemented yet"
   | Tuple _ -> error [pos] "Tuple evaluation not implemented yet"
