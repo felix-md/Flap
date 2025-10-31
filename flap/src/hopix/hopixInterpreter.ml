@@ -298,12 +298,13 @@ let primitives =
   |> bind' "true"         ptrue
   |> bind' "false"        pfalse
   |> bind' "nothing"      VUnit
-
-let initial_runtime () = {
-  memory      = Memory.create (640 * 1024 (* should be enough. -- B.Gates *));
-  environment = primitives;
-}
-
+  
+  let initial_runtime () = {
+    memory      = Memory.create (640 * 1024 (* should be enough. -- B.Gates *));
+    environment = primitives;
+    }
+    
+exception PatternMatchFailure of Position.t
 let rec evaluate runtime ast =
   try
     let runtime' = List.fold_left definition runtime ast in
@@ -318,8 +319,37 @@ let rec evaluate runtime ast =
                         E, M ⊢ dv ⇒ E', M'
 
 *)
+
 and definition runtime d =
-failwith "Students! This is your job!"
+  match Position.value d with 
+  | DefineValue vd -> value_definition runtime vd
+  (* We ignore Type definition *)
+  | _ -> runtime
+
+
+
+
+
+and value_definition runtime vd =
+  match vd with
+  | SimpleValue (id,_,e) ->
+    let id = Position.value id in
+    let new_env = Environment.bind runtime.environment id (expression' runtime.environment runtime.memory e) in
+    { runtime with environment = new_env }
+  | RecFunctions fdefs ->
+    {runtime with environment = rec_functions runtime.environment runtime.memory fdefs}
+
+
+
+and rec_functions environment memory = function 
+    | [] -> environment
+    | (id,_,FunctionDefinition (pat, body)) :: fdefs ->
+      (* We create a closure for the FunctionDefinition *)
+      let closure = VClosure(environment, pat, body) in
+      let new_env = Environment.bind environment (Position.value id) closure in
+      (* We continue with the rest of the list of function *)
+      rec_functions new_env memory fdefs
+
 
 and expression' environment memory e =
   expression (position e) environment memory (value e)
@@ -330,8 +360,117 @@ and expression' environment memory e =
 
    and E = [runtime.environment], M = [runtime.memory].
 *)
-and expression _ environment memory =
-failwith "Students! This is your job!"
+and expression pos environment memory = 
+  function 
+  | Literal e ->  eval_literal e
+  | Apply (e1,e2) -> 
+    apply_expr e1 e2 environment memory pos
+  | Variable (id, _) ->
+    Environment.lookup pos (Position.value id) environment 
+  | Tagged _ -> error [pos] "Read evaluation not implemented yet"
+  | Record _ -> error [pos] "Record evaluation not implemented yet"
+  | Field _ -> error [pos] "Field evaluation not implemented yet"
+  | Tuple _ -> error [pos] "Tuple evaluation not implemented yet"
+  | Sequence _ -> error [pos] "Sequence evaluation not implemented yet"
+  | Define _ -> error [pos] "Define evaluation not implemented yet"
+  | Fun _ -> error [pos] "Function evaluation not implemented yet"
+  | Ref _ -> error [pos] "Reference evaluation not implemented yet"
+  | Assign _ -> error [pos] "Assignment evaluation not implemented yet"
+  | Read _ -> error [pos] "Read evaluation not implemented yet"
+  | Case _ -> error [pos] "Case evaluation not implemented yet"
+  | IfThenElse (cond, then_e, else_e) -> if_then_else environment memory (cond, then_e, else_e)
+  | While _ -> error [pos] "While evaluation not implemented yet"
+  | For _ -> error [pos] "For evaluation not implemented yet"
+  | TypeAnnotation _ -> error [pos] "Type Annotation evaluation not implemented yet"
+
+
+and eval_literal e =
+  match Position.value e with
+  | LInt i -> VInt i
+  | LString s -> VString s 
+  | LChar c -> VChar c
+
+
+  
+and apply_expr f x environment memory pos =
+  let vx = expression' environment memory x in
+  let vf = expression' environment memory f in
+  match vf with 
+  (* Primitive function already implemented in OCaml*)
+  | VPrimitive (_,func) -> func memory vx
+  | VClosure (env, p, body) ->
+    let new_env = 
+      try 
+        (* We check if the function's pattern matches the argument value *)
+        pattern' p env vx 
+    with PatternMatchFailure pos ->
+      error [pos] "Pattern match failure in function application."
+    in
+    (* We evaluate the body with the new environment where the pattern variables are bound *)
+    expression' new_env memory body
+    
+    | _ -> error [pos] "Trying to apply a non-function value."
+   
+    
+and if_then_else  environment memory (cond, then_e, else_e) = 
+  let vcond = expression' environment memory cond in 
+  match value_as_bool vcond with 
+  | true -> expression' environment memory then_e
+  | false -> expression' environment memory else_e
+
+and pattern' pat environment vx = 
+  pattern (position pat) environment vx (value pat)
+        
+(** [pattern pos env value pat] extends [env] so that [value] is captured by [pat], and raises an exception otherwise. :
+
+            env ⊢ value ∼ pat ⇝ env'
+
+*)
+
+        
+and pattern pos environment value pat = 
+  match pat with 
+  | PVariable id -> pattern_variable id environment 
+  | PWildcard -> environment 
+  | PTypeAnnotation (p, _) -> pattern' p environment value
+  | PLiteral l ->  
+    (* if it's a literal we just need to compare both values *)
+    let literal_value = eval_literal l  in
+      if literal_value = value then environment 
+      else raise (PatternMatchFailure pos)
+ 
+  | PTaggedValue (k, _, ps) -> error [pos] "Tagged pattern not implemented yet"
+  | PRecord (fs, _) -> error [pos] "Record pattern not implemented yet"
+  | PTuple ps -> error [pos] "Tuple pattern not implemented yet"
+
+
+  | POr pats -> pattern_or pos environment value pats
+  | PAnd pats  -> pattern_and pos environment value pats
+
+
+and pattern_variable id environment = 
+  let id  = Position.value id in 
+  Environment.bind environment id VUnit
+
+and pattern_or pos environment value pats = match pats with 
+  | [] -> raise (PatternMatchFailure pos)
+  | p :: t ->
+    try 
+      pattern' p environment value
+      (* If the first pattern fail we try the next one because it's an "or" *)
+    with PatternMatchFailure _ -> pattern_or pos environment value t
+
+
+and pattern_and pos environment value pats = match pats with 
+  |[] -> environment 
+  | p :: t ->
+    try 
+      pattern' p environment value
+    (* If one pattern fail we raise the exception because it's an "and" *)
+    with PatternMatchFailure _ -> raise (PatternMatchFailure pos)
+    (* If it succeed we give the new environment to the next pattern *)
+    |> fun env' -> pattern_and pos env' value t
+
 
 (** This function returns the difference between two runtimes. *)
 and extract_observable runtime runtime' =
