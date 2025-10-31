@@ -367,11 +367,15 @@ and expression pos environment memory =
     apply_expr e1 e2 environment memory pos
   | Variable (id, _) ->
     Environment.lookup pos (Position.value id) environment 
-  | Tagged (cons, ty, expr) -> 
+  | Tagged (cons, tys, expr) -> 
     let vlist = List.map (expression' environment memory) expr in
     VTagged (Position.value cons, vlist)
-  | Record _ -> error [pos] "Record evaluation not implemented yet"
-  | Field _ -> error [pos] "Field evaluation not implemented yet"
+  | Record (fields, tys) -> 
+    let vfields = List.map (fun (label, expr) ->
+      (Position.value label, expression' environment memory expr)
+    ) fields in
+    VRecord vfields
+  | Field (expr, label, tys) -> error [pos] "Field evaluation not implemented yet"
   | Tuple _ -> error [pos] "Tuple evaluation not implemented yet"
   | Sequence _ -> error [pos] "Sequence evaluation not implemented yet"
   | Define _ -> error [pos] "Define evaluation not implemented yet"
