@@ -376,8 +376,14 @@ and expression pos environment memory =
     ) fields in
     VRecord vfields
   | Field (expr, label, tys) -> error [pos] "Field evaluation not implemented yet"
-  | Tuple _ -> error [pos] "Tuple evaluation not implemented yet"
-  | Sequence _ -> error [pos] "Sequence evaluation not implemented yet"
+  | Tuple expr -> 
+    let vlist = List.map (expression' environment memory) expr in
+    VTuple vlist
+  | Sequence expr -> 
+    let vlist = List.map (
+      expression' environment memory
+    ) expr in
+    List.nth vlist (List.length vlist - 1)
   | Define _ -> error [pos] "Define evaluation not implemented yet"
   | Fun _ -> error [pos] "Function evaluation not implemented yet"
   | Ref _ -> error [pos] "Reference evaluation not implemented yet"
