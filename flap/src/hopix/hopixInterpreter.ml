@@ -341,11 +341,17 @@ and value_definition runtime vd =
 
 
 
+
+and function_definition environment (FunctionDefinition (pat, body)) =
+  VClosure (environment, pat, body)
+
+
+
 and rec_functions environment memory = function 
     | [] -> environment
-    | (id,_,FunctionDefinition (pat, body)) :: fdefs ->
+    | (id,_,fd):: fdefs ->
       (* We create a closure for the FunctionDefinition *)
-      let closure = VClosure(environment, pat, body) in
+      let closure = function_definition environment fd in
       let new_env = Environment.bind environment (Position.value id) closure in
       (* We continue with the rest of the list of function *)
       rec_functions new_env memory fdefs
@@ -367,10 +373,10 @@ and expression pos environment memory =
     apply_expr e1 e2 environment memory pos
   | Variable (id, _) ->
     Environment.lookup pos (Position.value id) environment 
-  | Tagged (cons, tys, expr) -> 
+  | Tagged (cons, _ , expr) -> 
     let vlist = List.map (expression' environment memory) expr in
     VTagged (Position.value cons, vlist)
-  | Record (fields, tys) -> 
+  | Record (fields, _ ) -> 
     let vfields = List.map (fun (label, expr) ->
       (Position.value label, expression' environment memory expr)
     ) fields in
@@ -387,7 +393,7 @@ and expression pos environment memory =
   | Read _ -> error [pos] "Read evaluation not implemented yet"
   | Case _ -> error [pos] "Case evaluation not implemented yet"
   | IfThenElse (cond, then_e, else_e) -> if_then_else environment memory (cond, then_e, else_e)
-  | While _ -> error [pos] "While evaluation not implemented yet"
+  | While (cond, body) -> while_loop environment memory (cond,body) pos
   | For _ -> error [pos] "For evaluation not implemented yet"
   | TypeAnnotation _ -> error [pos] "Type Annotation evaluation not implemented yet"
 
@@ -436,6 +442,22 @@ and if_then_else  environment memory (cond, then_e, else_e) =
   | true -> expression' environment memory then_e
   | false -> expression' environment memory else_e
 
+
+
+and while_loop environment memory (cond,body) pos =
+  let rec aux memory =
+    let vcond = expression' environment memory cond in 
+    match value_as_bool vcond with 
+    | true ->
+      begin
+      let body_value = expression' environment memory body in
+      match body_value with
+      | VUnit -> aux memory
+      | _ -> error [pos] "This expression should return unit."
+      end
+    | false -> VUnit
+
+    in aux memory
 and pattern' pat environment vx = 
   pattern (position pat) environment vx (value pat)
         
