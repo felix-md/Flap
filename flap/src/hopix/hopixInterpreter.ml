@@ -397,7 +397,7 @@ and expression pos environment memory =
   | IfThenElse (cond, then_e, else_e) -> if_then_else environment memory (cond, then_e, else_e)
   | While (cond, body) -> while_loop environment memory (cond,body) pos
   | For (id,lower,upper,body)-> for_loop environment memory (id,lower,upper,body) pos 
-  | TypeAnnotation _ -> error [pos] "Type Annotation evaluation not implemented yet"
+  | TypeAnnotation (expr,_)-> expression' environment memory expr 
 
 
 and eval_literal e =
