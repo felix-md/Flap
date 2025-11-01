@@ -347,17 +347,26 @@ and function_definition environment (FunctionDefinition (pat, body)) =
 
 
 
-and rec_functions environment memory = function 
+and rec_functions environment memory  fdefs =
+  let eval_and_update env (id,_,fd) =
+    let closure = function_definition env fd in
+    Environment.update id.position id.value env closure;
+  in
+
+  let rec aux environment memory = function 
     | [] -> environment
-    | (id,_,fd):: fdefs ->
-      (* We create a closure for the FunctionDefinition *)
-      let closure = function_definition environment fd in
-      let new_env = Environment.bind environment (Position.value id) closure in
-      (* We continue with the rest of the list of function *)
-      rec_functions new_env memory fdefs
+    | (id,_,_):: fdefs ->
+      (* We initiate each function name to VUnit *)
+      let new_env = Environment.bind environment (Position.value id) VUnit in
+      aux new_env memory fdefs
+  in
+  (* Here we have an environment with all function names bound to VUnit *)
+  let env_all_defined = aux  environment memory fdefs in
+  (* Now we update each function name with its actual closure in the env where all function names are bound. *)
+  List.iter (eval_and_update env_all_defined) fdefs;
+  env_all_defined
 
-
-and expression' environment memory e =
+  and expression' environment memory e =
   expression (position e) environment memory (value e)
 
 (** [expression pos runtime e] evaluates into a value [v] if
