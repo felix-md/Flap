@@ -418,10 +418,10 @@ and sequence environment memory exprs =
     | e :: t -> 
       let value = expression' environment memory e in
       aux (value :: acc) t
+    (* We only return the last value of the sequence*)
+    in List.hd (aux [] exprs)
 
-  (* We return the list reversed to have the correct order *)
-  in VTuple (List.rev (aux [] exprs))
-
+  
 and if_then_else  environment memory (cond, then_e, else_e) = 
   let vcond = expression' environment memory cond in 
   match value_as_bool vcond with 
