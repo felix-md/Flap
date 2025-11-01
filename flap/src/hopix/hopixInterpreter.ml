@@ -393,7 +393,7 @@ and expression pos environment memory =
   | Ref expr -> reference environment memory expr 
   | Assign (name, value) -> assign environment memory (name,value) pos 
   | Read expr -> read environment memory expr pos 
-  | Case _ -> error [pos] "Case evaluation not implemented yet"
+  | Case (e, branchs) -> case environment memory (e,branchs) pos
   | IfThenElse (cond, then_e, else_e) -> if_then_else environment memory (cond, then_e, else_e)
   | While (cond, body) -> while_loop environment memory (cond,body) pos
   | For (id,lower,upper,body)-> for_loop environment memory (id,lower,upper,body) pos 
@@ -463,6 +463,23 @@ and read environment memory expr pos =
  
   
 
+and case environment memory (e,branches) pos = 
+  let ve = expression' environment memory e in
+  match branches with
+  | [] ->  error [pos] "Non exhaustive pattern match."
+  | pats ->
+    let rec aux = function 
+    | [] -> error [pos] "Non exhaustive pattern match."
+    | p :: t ->
+      let Branch (pat, expr) = Position.value p in
+      try 
+        let new_env = pattern' pat environment ve in  
+        expression' new_env memory expr
+      with PatternMatchFailure _ -> aux t
+    in aux pats
+
+
+
 
 and if_then_else  environment memory (cond, then_e, else_e) = 
   let vcond = expression' environment memory cond in 
@@ -494,7 +511,7 @@ and for_loop environment memory (id,lower,upper,body) pos =
   match value_as_int vlower, value_as_int vupper with
   | Some l, Some u ->
     let rec aux i environment memory =
-      if i > u then VUnit
+      if Mint.to_int i > Mint.to_int u then VUnit
       else 
         let new_env = Environment.bind environment (Position.value id) (VInt i) in
         let body_value = expression' new_env memory body in
