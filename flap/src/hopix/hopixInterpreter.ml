@@ -384,7 +384,7 @@ and expression pos environment memory =
     let new_runtime = value_definition {memory; environment} def in
     expression' new_runtime.environment new_runtime.memory expr
   | Fun _ -> error [pos] "Function evaluation not implemented yet"
-  | Ref _ -> error [pos] "Reference evaluation not implemented yet"
+  | Ref expr -> expression' environment memory expr
   | Assign _ -> error [pos] "Assignment evaluation not implemented yet"
   | Read _ -> error [pos] "Read evaluation not implemented yet"
   | Case _ -> error [pos] "Case evaluation not implemented yet"
