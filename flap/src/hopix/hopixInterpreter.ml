@@ -380,7 +380,9 @@ and expression pos environment memory =
     let vlist = List.map (expression' environment memory) expr in
     VTuple vlist
   | Sequence seq -> sequence environment memory seq
-  | Define _ -> error [pos] "Define evaluation not implemented yet"
+  | Define (def, expr) -> 
+    let new_runtime = value_definition {memory; environment} def in
+    expression' new_runtime.environment new_runtime.memory expr
   | Fun _ -> error [pos] "Function evaluation not implemented yet"
   | Ref _ -> error [pos] "Reference evaluation not implemented yet"
   | Assign _ -> error [pos] "Assignment evaluation not implemented yet"
