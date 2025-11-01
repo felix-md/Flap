@@ -381,7 +381,7 @@ and expression pos environment memory =
       (Position.value label, expression' environment memory expr)
     ) fields in
     VRecord vfields
-  | Field (expr, label, tys) -> error [pos] "Field evaluation not implemented yet"
+  | Field (expr, label, _) -> field_access environment memory (expr,label) pos
   | Tuple expr -> 
     let vlist = List.map (expression' environment memory) expr in
     VTuple vlist
@@ -426,7 +426,25 @@ and apply_expr f x environment memory pos =
     expression' new_env memory body
     
     | _ -> error [pos] "Trying to apply a non-function value."
-   
+  
+    
+
+
+and field_access environment memory (expr, label) pos =
+  let v = expression' environment memory expr in
+  match value_as_record v with 
+  | None  -> error [pos] "Trying to access a field of a non-record value."
+  | Some fields -> 
+    let rec aux = function
+    | [] -> error [pos] (Printf.sprintf "Label %s not found in record." (match label.value with LId l -> l))
+    | (li, vi) :: t ->
+      if li = label.value then vi
+      else aux t
+    in aux fields
+
+
+
+
 and sequence environment memory exprs = 
   match exprs with
   | [] -> VUnit
