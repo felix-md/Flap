@@ -396,7 +396,7 @@ and expression pos environment memory =
   | Case _ -> error [pos] "Case evaluation not implemented yet"
   | IfThenElse (cond, then_e, else_e) -> if_then_else environment memory (cond, then_e, else_e)
   | While (cond, body) -> while_loop environment memory (cond,body) pos
-  | For _ -> error [pos] "For evaluation not implemented yet"
+  | For (id,lower,upper,body)-> for_loop environment memory (id,lower,upper,body) pos 
   | TypeAnnotation _ -> error [pos] "Type Annotation evaluation not implemented yet"
 
 
@@ -460,6 +460,25 @@ and while_loop environment memory (cond,body) pos =
     | false -> VUnit
 
     in aux memory
+
+
+and for_loop environment memory (id,lower,upper,body) pos =
+  let vlower = expression' environment memory lower in
+  let vupper = expression' environment memory upper in
+  match value_as_int vlower, value_as_int vupper with
+  | Some l, Some u ->
+    let rec aux i environment memory =
+      if l > u then VUnit
+      else 
+        let new_env = Environment.bind environment (Position.value id) (VInt i) in
+        let body_value = expression' new_env memory body in
+        match body_value with
+        | VUnit -> aux (Mint.add i Mint.one) environment memory
+        | _ -> error [pos] "This expression should return unit."
+    in aux l environment memory
+  | _ -> error [pos] "Bounds of for loop should be integers."
+
+
 and pattern' pat environment vx = 
   pattern (position pat) environment vx (value pat)
         
