@@ -618,13 +618,11 @@ and pattern_or pos environment value pats = match pats with
 and pattern_and pos environment value pats = match pats with 
   |[] -> environment 
   | p :: t ->
-    try 
-      pattern' p environment value
+    try
+      let env' = pattern' p environment value in
+      pattern_and pos env' value t
     (* If one pattern fail we raise the exception because it's an "and" *)
     with PatternMatchFailure _ -> raise (PatternMatchFailure pos)
-    (* If it succeed we give the new environment to the next pattern *)
-    |> fun env' -> pattern_and pos env' value t
-
 
 (** This function returns the difference between two runtimes. *)
 and extract_observable runtime runtime' =
