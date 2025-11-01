@@ -492,9 +492,6 @@ and read environment memory expr pos =
 
 and case environment memory (e,branches) pos = 
   let ve = expression' environment memory e in
-  match branches with
-  | [] ->  error [pos] "Non exhaustive pattern match."
-  | pats ->
     let rec aux = function 
     | [] -> error [pos] "Non exhaustive pattern match."
     | p :: t ->
@@ -503,7 +500,7 @@ and case environment memory (e,branches) pos =
         let new_env = pattern' pat environment ve in  
         expression' new_env memory expr
       with PatternMatchFailure _ -> aux t
-    in aux pats
+    in aux branches 
 
 
 
