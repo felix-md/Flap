@@ -379,11 +379,7 @@ and expression pos environment memory =
   | Tuple expr -> 
     let vlist = List.map (expression' environment memory) expr in
     VTuple vlist
-  | Sequence expr -> 
-    let vlist = List.map (
-      expression' environment memory
-    ) expr in
-    List.nth vlist (List.length vlist - 1)
+  | Sequence seq -> sequence environment memory seq
   | Define _ -> error [pos] "Define evaluation not implemented yet"
   | Fun _ -> error [pos] "Function evaluation not implemented yet"
   | Ref _ -> error [pos] "Reference evaluation not implemented yet"
@@ -423,7 +419,17 @@ and apply_expr f x environment memory pos =
     
     | _ -> error [pos] "Trying to apply a non-function value."
    
-    
+and sequence environment memory exprs = 
+  (* We create a list of all the values *)
+  let rec aux acc = function 
+    | [] -> acc 
+    | e :: t -> 
+      let value = expression' environment memory e in
+      aux (value :: acc) t
+    (* We only return the last value of the sequence*)
+    in List.hd (aux [] exprs)
+
+  
 and if_then_else  environment memory (cond, then_e, else_e) = 
   let vcond = expression' environment memory cond in 
   match value_as_bool vcond with 
@@ -442,7 +448,7 @@ and pattern' pat environment vx =
         
 and pattern pos environment value pat = 
   match pat with 
-  | PVariable id -> pattern_variable id environment 
+  | PVariable id -> pattern_variable id environment value 
   | PWildcard -> environment 
   | PTypeAnnotation (p, _) -> pattern' p environment value
   | PLiteral l ->  
@@ -451,18 +457,50 @@ and pattern pos environment value pat =
       if literal_value = value then environment 
       else raise (PatternMatchFailure pos)
  
-  | PTaggedValue (k, _, ps) -> error [pos] "Tagged pattern not implemented yet"
-  | PRecord (fs, _) -> error [pos] "Record pattern not implemented yet"
-  | PTuple ps -> error [pos] "Tuple pattern not implemented yet"
-
-
+  | PTaggedValue (constr, tys, pats) -> tagged_pattern pos environment value (constr, tys, pats) 
+  | PRecord (fs, _) -> record_pattern pos environment value fs 
+  | PTuple ps -> tuple pos environment value ps 
   | POr pats -> pattern_or pos environment value pats
   | PAnd pats  -> pattern_and pos environment value pats
 
+and pattern_list environment values pats = 
+  List.fold_left2 (fun env v p -> pattern' p env v) environment values pats
 
-and pattern_variable id environment = 
+
+and pattern_variable id environment value = 
   let id  = Position.value id in 
-  Environment.bind environment id VUnit
+  Environment.bind environment id value 
+
+
+and tagged_pattern pos environment value (constr, _, pats) =
+  match value_as_tagged value with
+  | None -> raise (PatternMatchFailure pos)
+  | Some (k, vs) -> 
+    if k <> constr.value then raise (PatternMatchFailure pos);
+    pattern_list environment vs pats
+
+
+and record_pattern pos environment value fs = 
+  match value_as_record value with 
+  | None -> raise (PatternMatchFailure pos )
+  | Some fields ->
+     let rec aux fields pats environment = 
+      match fields,pats with 
+      | _, [] -> environment
+      | [], _ -> raise (PatternMatchFailure pos)
+      | (l1, v) :: tfields, (l2, p) :: tpats ->
+        if l1 <> Position.value l2 then raise (PatternMatchFailure pos);
+        let new_env = pattern' p environment v in
+        aux tfields tpats new_env
+     in
+     aux fields fs environment
+
+and tuple pos environment value pats = 
+  match value with 
+  | VTuple values -> 
+    if List.length values <> List.length pats then raise (PatternMatchFailure pos);
+    pattern_list environment values pats
+  | _ -> raise (PatternMatchFailure pos)
 
 and pattern_or pos environment value pats = match pats with 
   | [] -> raise (PatternMatchFailure pos)
