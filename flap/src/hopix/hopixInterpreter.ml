@@ -389,7 +389,7 @@ and expression pos environment memory =
   | Define (def, expr) -> 
     let new_runtime = value_definition {memory; environment} def in
     expression' new_runtime.environment new_runtime.memory expr
-  | Fun _ -> error [pos] "Function evaluation not implemented yet"
+  | Fun fd -> function_definition environment fd
   | Ref expr -> reference environment memory expr 
   | Assign (name, value) -> assign environment memory (name,value) pos 
   | Read expr -> read environment memory expr pos 
