@@ -390,9 +390,9 @@ and expression pos environment memory =
     let new_runtime = value_definition {memory; environment} def in
     expression' new_runtime.environment new_runtime.memory expr
   | Fun _ -> error [pos] "Function evaluation not implemented yet"
-  | Ref expr -> expression' environment memory expr
-  | Assign _ -> error [pos] "Assignment evaluation not implemented yet"
-  | Read _ -> error [pos] "Read evaluation not implemented yet"
+  | Ref expr -> reference environment memory expr 
+  | Assign (name, value) -> assign environment memory (name,value) pos 
+  | Read expr -> read environment memory expr pos 
   | Case _ -> error [pos] "Case evaluation not implemented yet"
   | IfThenElse (cond, then_e, else_e) -> if_then_else environment memory (cond, then_e, else_e)
   | While (cond, body) -> while_loop environment memory (cond,body) pos
@@ -428,16 +428,42 @@ and apply_expr f x environment memory pos =
     | _ -> error [pos] "Trying to apply a non-function value."
    
 and sequence environment memory exprs = 
-  (* We create a list of all the values *)
-  let rec aux acc = function 
-    | [] -> acc 
-    | e :: t -> 
-      let value = expression' environment memory e in
-      aux (value :: acc) t
-    (* We only return the last value of the sequence*)
-    in List.hd (aux [] exprs)
+  match exprs with
+  | [] -> VUnit
+  | [e] -> expression' environment memory e
+  | e :: t -> 
+    let _ = expression' environment memory e in
+    sequence environment memory t
+
+
+and reference environment memory expr =
+  let v = expression' environment memory expr in
+  (*? we allocate one ?*)
+  let location = Memory.allocate memory Mint.one v in
+  VLocation location
+
+and assign environment memory (name, value) pos =
+  let vname = expression' environment memory name in 
+  match  value_as_location vname  with
+  | None -> error [pos] "Trying to assign a non-location value."
+  | Some loc -> 
+    let new_value = expression' environment memory value in
+    Memory.write (Memory.dereference memory loc) Mint.zero new_value;
+    VUnit 
+
+
+
 
   
+and read environment memory expr pos =
+  let v = expression' environment memory expr in
+  match value_as_location v with 
+  | None -> error [pos] "Trying to dereference a non-location value."
+  | Some loc -> let loc = Memory.dereference memory loc in Memory.read loc Mint.zero
+ 
+  
+
+
 and if_then_else  environment memory (cond, then_e, else_e) = 
   let vcond = expression' environment memory cond in 
   match value_as_bool vcond with 
@@ -468,7 +494,7 @@ and for_loop environment memory (id,lower,upper,body) pos =
   match value_as_int vlower, value_as_int vupper with
   | Some l, Some u ->
     let rec aux i environment memory =
-      if l > u then VUnit
+      if i > u then VUnit
       else 
         let new_env = Environment.bind environment (Position.value id) (VInt i) in
         let body_value = expression' new_env memory body in
