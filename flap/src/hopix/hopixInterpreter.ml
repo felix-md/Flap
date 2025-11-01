@@ -341,17 +341,32 @@ and value_definition runtime vd =
 
 
 
-and rec_functions environment memory = function 
+
+and function_definition environment (FunctionDefinition (pat, body)) =
+  VClosure (environment, pat, body)
+
+
+
+and rec_functions environment memory  fdefs =
+  let eval_and_update env (id,_,fd) =
+    let closure = function_definition env fd in
+    Environment.update id.position id.value env closure;
+  in
+
+  let rec aux environment memory = function 
     | [] -> environment
-    | (id,_,FunctionDefinition (pat, body)) :: fdefs ->
-      (* We create a closure for the FunctionDefinition *)
-      let closure = VClosure(environment, pat, body) in
-      let new_env = Environment.bind environment (Position.value id) closure in
-      (* We continue with the rest of the list of function *)
-      rec_functions new_env memory fdefs
+    | (id,_,_):: fdefs ->
+      (* We initiate each function name to VUnit *)
+      let new_env = Environment.bind environment (Position.value id) VUnit in
+      aux new_env memory fdefs
+  in
+  (* Here we have an environment with all function names bound to VUnit *)
+  let env_all_defined = aux  environment memory fdefs in
+  (* Now we update each function name with its actual closure in the env where all function names are bound. *)
+  List.iter (eval_and_update env_all_defined) fdefs;
+  env_all_defined
 
-
-and expression' environment memory e =
+  and expression' environment memory e =
   expression (position e) environment memory (value e)
 
 (** [expression pos runtime e] evaluates into a value [v] if
@@ -367,29 +382,31 @@ and expression pos environment memory =
     apply_expr e1 e2 environment memory pos
   | Variable (id, _) ->
     Environment.lookup pos (Position.value id) environment 
-  | Tagged (cons, tys, expr) -> 
+  | Tagged (cons, _ , expr) -> 
     let vlist = List.map (expression' environment memory) expr in
     VTagged (Position.value cons, vlist)
-  | Record (fields, tys) -> 
+  | Record (fields, _ ) -> 
     let vfields = List.map (fun (label, expr) ->
       (Position.value label, expression' environment memory expr)
     ) fields in
     VRecord vfields
-  | Field (expr, label, tys) -> error [pos] "Field evaluation not implemented yet"
+  | Field (expr, label, _) -> field_access environment memory (expr,label) pos
   | Tuple expr -> 
     let vlist = List.map (expression' environment memory) expr in
     VTuple vlist
   | Sequence seq -> sequence environment memory seq
-  | Define _ -> error [pos] "Define evaluation not implemented yet"
-  | Fun _ -> error [pos] "Function evaluation not implemented yet"
-  | Ref _ -> error [pos] "Reference evaluation not implemented yet"
-  | Assign _ -> error [pos] "Assignment evaluation not implemented yet"
-  | Read _ -> error [pos] "Read evaluation not implemented yet"
-  | Case _ -> error [pos] "Case evaluation not implemented yet"
+  | Define (def, expr) -> 
+    let new_runtime = value_definition {memory; environment} def in
+    expression' new_runtime.environment new_runtime.memory expr
+  | Fun fd -> function_definition environment fd
+  | Ref expr -> reference environment memory expr 
+  | Assign (name, value) -> assign environment memory (name,value) pos 
+  | Read expr -> read environment memory expr pos 
+  | Case (e, branchs) -> case environment memory (e,branchs) pos
   | IfThenElse (cond, then_e, else_e) -> if_then_else environment memory (cond, then_e, else_e)
-  | While _ -> error [pos] "While evaluation not implemented yet"
-  | For _ -> error [pos] "For evaluation not implemented yet"
-  | TypeAnnotation _ -> error [pos] "Type Annotation evaluation not implemented yet"
+  | While (cond, body) -> while_loop environment memory (cond,body) pos
+  | For (id,lower,upper,body)-> for_loop environment memory (id,lower,upper,body) pos 
+  | TypeAnnotation (expr,_)-> expression' environment memory expr 
 
 
 and eval_literal e =
@@ -418,23 +435,119 @@ and apply_expr f x environment memory pos =
     expression' new_env memory body
     
     | _ -> error [pos] "Trying to apply a non-function value."
-   
+  
+    
+
+
+and field_access environment memory (expr, label) pos =
+  let v = expression' environment memory expr in
+  match value_as_record v with 
+  | None  -> error [pos] "Trying to access a field of a non-record value."
+  | Some fields -> 
+    let rec aux = function
+    | [] -> error [pos] (Printf.sprintf "Label %s not found in record." (match label.value with LId l -> l))
+    | (li, vi) :: t ->
+      if li = label.value then vi
+      else aux t
+    in aux fields
+
+
+
+
 and sequence environment memory exprs = 
-  (* We create a list of all the values *)
-  let rec aux acc = function 
-    | [] -> acc 
-    | e :: t -> 
-      let value = expression' environment memory e in
-      aux (value :: acc) t
-    (* We only return the last value of the sequence*)
-    in List.hd (aux [] exprs)
+  match exprs with
+  | [] -> VUnit
+  | [e] -> expression' environment memory e
+  | e :: t -> 
+    let _ = expression' environment memory e in
+    sequence environment memory t
+
+
+and reference environment memory expr =
+  let v = expression' environment memory expr in
+  (*? we allocate one ?*)
+  let location = Memory.allocate memory Mint.one v in
+  VLocation location
+
+and assign environment memory (name, value) pos =
+  let vname = expression' environment memory name in 
+  match  value_as_location vname  with
+  | None -> error [pos] "Trying to assign a non-location value."
+  | Some loc -> 
+    let new_value = expression' environment memory value in
+    Memory.write (Memory.dereference memory loc) Mint.zero new_value;
+    VUnit 
+
+
+
 
   
+and read environment memory expr pos =
+  let v = expression' environment memory expr in
+  match value_as_location v with 
+  | None -> error [pos] "Trying to dereference a non-location value."
+  | Some loc -> let loc = Memory.dereference memory loc in Memory.read loc Mint.zero
+ 
+  
+
+and case environment memory (e,branches) pos = 
+  let ve = expression' environment memory e in
+  match branches with
+  | [] ->  error [pos] "Non exhaustive pattern match."
+  | pats ->
+    let rec aux = function 
+    | [] -> error [pos] "Non exhaustive pattern match."
+    | p :: t ->
+      let Branch (pat, expr) = Position.value p in
+      try 
+        let new_env = pattern' pat environment ve in  
+        expression' new_env memory expr
+      with PatternMatchFailure _ -> aux t
+    in aux pats
+
+
+
+
 and if_then_else  environment memory (cond, then_e, else_e) = 
   let vcond = expression' environment memory cond in 
   match value_as_bool vcond with 
   | true -> expression' environment memory then_e
   | false -> expression' environment memory else_e
+
+
+
+and while_loop environment memory (cond,body) pos =
+  let rec aux memory =
+    let vcond = expression' environment memory cond in 
+    match value_as_bool vcond with 
+    | true ->
+      begin
+      let body_value = expression' environment memory body in
+      match body_value with
+      | VUnit -> aux memory
+      | _ -> error [pos] "This expression should return unit."
+      end
+    | false -> VUnit
+
+    in aux memory
+
+
+and for_loop environment memory (id,lower,upper,body) pos =
+  let vlower = expression' environment memory lower in
+  let vupper = expression' environment memory upper in
+  match value_as_int vlower, value_as_int vupper with
+  | Some l, Some u ->
+    let rec aux i environment memory =
+      if Mint.to_int i > Mint.to_int u then VUnit
+      else 
+        let new_env = Environment.bind environment (Position.value id) (VInt i) in
+        let body_value = expression' new_env memory body in
+        match body_value with
+        | VUnit -> aux (Mint.add i Mint.one) environment memory
+        | _ -> error [pos] "This expression should return unit."
+    in aux l environment memory
+  | _ -> error [pos] "Bounds of for loop should be integers."
+
 
 and pattern' pat environment vx = 
   pattern (position pat) environment vx (value pat)
@@ -514,13 +627,11 @@ and pattern_or pos environment value pats = match pats with
 and pattern_and pos environment value pats = match pats with 
   |[] -> environment 
   | p :: t ->
-    try 
-      pattern' p environment value
+    try
+      let env' = pattern' p environment value in
+      pattern_and pos env' value t
     (* If one pattern fail we raise the exception because it's an "and" *)
     with PatternMatchFailure _ -> raise (PatternMatchFailure pos)
-    (* If it succeed we give the new environment to the next pattern *)
-    |> fun env' -> pattern_and pos env' value t
-
 
 (** This function returns the difference between two runtimes. *)
 and extract_observable runtime runtime' =
