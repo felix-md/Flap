@@ -382,18 +382,14 @@ and expression pos environment memory =
     apply_expr e1 e2 environment memory pos
   | Variable (id, _) ->
     Environment.lookup pos (Position.value id) environment 
-  | Tagged (cons, _ , expr) -> 
-    let vlist = List.map (expression' environment memory) expr in
-    VTagged (Position.value cons, vlist)
+  | Tagged (cons, _ , expr) -> VTagged (Position.value cons, eval_list environment memory expr)
   | Record (fields, _ ) -> 
     let vfields = List.map (fun (label, expr) ->
       (Position.value label, expression' environment memory expr)
     ) fields in
     VRecord vfields
   | Field (expr, label, _) -> field_access environment memory (expr,label) pos
-  | Tuple expr -> 
-    let vlist = List.map (expression' environment memory) expr in
-    VTuple vlist
+  | Tuple expr -> VTuple (eval_list environment memory expr)
   | Sequence seq -> sequence environment memory seq
   | Define (def, expr) -> 
     let new_runtime = value_definition {memory; environment} def in
@@ -408,6 +404,8 @@ and expression pos environment memory =
   | For (id,lower,upper,body)-> for_loop environment memory (id,lower,upper,body) pos 
   | TypeAnnotation (expr,_)-> expression' environment memory expr 
 
+and eval_list environment memory expr =
+  List.map (expression' environment memory) expr
 
 and eval_literal e =
   match Position.value e with
