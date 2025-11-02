@@ -348,14 +348,14 @@ and function_definition environment (FunctionDefinition (pat, body)) =
 
 
 and rec_functions environment memory  fdefs =
-  let eval_and_update env (id,_,fd) =
+  let eval_and_update env (id, _, fd) =
     let closure = function_definition env fd in
     Environment.update id.position id.value env closure;
   in
 
   let rec aux environment memory = function 
     | [] -> environment
-    | (id,_,_):: fdefs ->
+    | (id, _, _):: fdefs ->
       (* We initiate each function name to VUnit *)
       let new_env = Environment.bind environment (Position.value id) VUnit in
       aux new_env memory fdefs
@@ -382,8 +382,8 @@ and expression pos environment memory =
     apply_expr e1 e2 environment memory pos
   | Variable (id, _) ->
     Environment.lookup pos (Position.value id) environment 
-  | Tagged (cons, _ , exprs) -> VTagged (Position.value cons, eval_list environment memory exprs)
-  | Record (fields, _ ) -> record environment memory fields
+  | Tagged (cons, _, exprs) -> VTagged (Position.value cons, eval_list environment memory exprs)
+  | Record (fields, _) -> record environment memory fields
   | Field (expr, label, _) -> field_access environment memory (expr,label) pos
   | Tuple exprs -> VTuple (eval_list environment memory exprs)
   | Sequence seq -> sequence environment memory seq
@@ -395,8 +395,8 @@ and expression pos environment memory =
   | Case (e, branchs) -> case environment memory (e,branchs) pos
   | IfThenElse (cond, then_e, else_e) -> if_then_else environment memory (cond, then_e, else_e)
   | While (cond, body) -> while_loop environment memory (cond,body) pos
-  | For (id,lower,upper,body)-> for_loop environment memory (id,lower,upper,body) pos 
-  | TypeAnnotation (expr,_)-> expression' environment memory expr 
+  | For (id, lower, upper, body)-> for_loop environment memory (id,lower,upper,body) pos 
+  | TypeAnnotation (expr, _)-> expression' environment memory expr 
 
 (** [eval_list] evaluates a list of expressions in the given environment and memory. *)
 and eval_list environment memory exprs =
@@ -426,7 +426,6 @@ and apply_expr f x environment memory pos =
     in
     (* We evaluate the body with the new environment where the pattern variables are bound *)
     expression' new_env memory body
-    
     | _ -> error [pos] "Trying to apply a non-function value."
   
 and record environment memory fields = 
@@ -521,7 +520,7 @@ and while_loop environment memory (cond,body) pos =
     in aux memory
 
 
-and for_loop environment memory (id,lower,upper,body) pos =
+and for_loop environment memory (id, lower, upper, body) pos =
   let vlower = expression' environment memory lower in
   let vupper = expression' environment memory upper in
   match value_as_int vlower, value_as_int vupper with
@@ -555,7 +554,7 @@ and pattern pos environment value pat =
   | PTypeAnnotation (p, _) -> pattern' p environment value
   | PLiteral l ->  
     (* if it's a literal we just need to compare both values *)
-    let literal_value = eval_literal l  in
+    let literal_value = eval_literal l in
       if literal_value = value then environment 
       else raise (PatternMatchFailure pos)
  
@@ -563,14 +562,14 @@ and pattern pos environment value pat =
   | PRecord (fs, _) -> record_pattern pos environment value fs 
   | PTuple ps -> tuple pos environment value ps 
   | POr pats -> pattern_or pos environment value pats
-  | PAnd pats  -> pattern_and pos environment value pats
+  | PAnd pats -> pattern_and pos environment value pats
 
 and pattern_list environment values pats = 
   List.fold_left2 (fun env v p -> pattern' p env v) environment values pats
 
 
 and pattern_variable id environment value = 
-  let id  = Position.value id in 
+  let id = Position.value id in 
   Environment.bind environment id value 
 
 
@@ -578,6 +577,7 @@ and tagged_pattern pos environment value (constr, _, pats) =
   match value_as_tagged value with
   | None -> raise (PatternMatchFailure pos)
   | Some (k, vs) -> 
+    (* Check that the constructor matches *)
     if k <> constr.value then raise (PatternMatchFailure pos);
     (* Check that the number of fields match *)
     if List.length vs <> List.length pats then
