@@ -579,6 +579,9 @@ and tagged_pattern pos environment value (constr, _, pats) =
   | None -> raise (PatternMatchFailure pos)
   | Some (k, vs) -> 
     if k <> constr.value then raise (PatternMatchFailure pos);
+    (* Check that the number of fields match *)
+    if List.length vs <> List.length pats then
+      raise (PatternMatchFailure pos);
     pattern_list environment vs pats
 
 
@@ -586,16 +589,18 @@ and record_pattern pos environment value fs =
   match value_as_record value with 
   | None -> raise (PatternMatchFailure pos )
   | Some fields ->
-     let rec aux fields pats environment = 
-      match fields,pats with 
-      | _, [] -> environment
-      | [], _ -> raise (PatternMatchFailure pos)
-      | (l1, v) :: tfields, (l2, p) :: tpats ->
-        if l1 <> Position.value l2 then raise (PatternMatchFailure pos);
-        let new_env = pattern' p environment v in
-        aux tfields tpats new_env
-     in
-     aux fields fs environment
+    (* For each field in the record pattern, we need to bind it to the corresponding value in the record *)
+    let bind_one env (lpat, p) =
+      let l = Position.value lpat in
+      try
+        (* Find the corresponding value with label*)
+        let v = List.assoc l fields in
+        (* Bind the pattern to the value *)
+        pattern' p env v
+      with Not_found ->
+        raise (PatternMatchFailure pos)
+    in
+    List.fold_left bind_one environment fs
 
 and tuple pos environment value pats = 
   match value with 
