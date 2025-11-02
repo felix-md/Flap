@@ -452,13 +452,10 @@ and field_access environment memory (expr, label) pos =
 
 
 
-and sequence environment memory exprs = 
+and sequence environment memory exprs =
   match exprs with
   | [] -> VUnit
-  | [e] -> expression' environment memory e
-  | e :: t -> 
-    let _ = expression' environment memory e in
-    sequence environment memory t
+  | es -> List.fold_left (fun _ e -> expression' environment memory e) VUnit es
 
 
 and reference environment memory expr =
