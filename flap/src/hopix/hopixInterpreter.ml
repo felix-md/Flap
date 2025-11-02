@@ -348,14 +348,14 @@ and function_definition environment (FunctionDefinition (pat, body)) =
 
 
 and rec_functions environment memory  fdefs =
-  let eval_and_update env (id,_,fd) =
+  let eval_and_update env (id, _, fd) =
     let closure = function_definition env fd in
     Environment.update id.position id.value env closure;
   in
 
   let rec aux environment memory = function 
     | [] -> environment
-    | (id,_,_):: fdefs ->
+    | (id, _, _):: fdefs ->
       (* We initiate each function name to VUnit *)
       let new_env = Environment.bind environment (Position.value id) VUnit in
       aux new_env memory fdefs
@@ -382,18 +382,12 @@ and expression pos environment memory =
     apply_expr e1 e2 environment memory pos
   | Variable (id, _) ->
     Environment.lookup pos (Position.value id) environment 
-  | Tagged (cons, _ , expr) -> VTagged (Position.value cons, eval_list environment memory expr)
-  | Record (fields, _ ) -> 
-    let vfields = List.map (fun (label, expr) ->
-      (Position.value label, expression' environment memory expr)
-    ) fields in
-    VRecord vfields
+  | Tagged (cons, _, exprs) -> VTagged (Position.value cons, eval_list environment memory exprs)
+  | Record (fields, _) -> record environment memory fields
   | Field (expr, label, _) -> field_access environment memory (expr,label) pos
-  | Tuple expr -> VTuple (eval_list environment memory expr)
+  | Tuple exprs -> VTuple (eval_list environment memory exprs)
   | Sequence seq -> sequence environment memory seq
-  | Define (def, expr) -> 
-    let new_runtime = value_definition {memory; environment} def in
-    expression' new_runtime.environment new_runtime.memory expr
+  | Define (def, expr) -> define environment memory def expr
   | Fun fd -> function_definition environment fd
   | Ref expr -> reference environment memory expr 
   | Assign (name, value) -> assign environment memory (name,value) pos 
@@ -401,11 +395,12 @@ and expression pos environment memory =
   | Case (e, branchs) -> case environment memory (e,branchs) pos
   | IfThenElse (cond, then_e, else_e) -> if_then_else environment memory (cond, then_e, else_e)
   | While (cond, body) -> while_loop environment memory (cond,body) pos
-  | For (id,lower,upper,body)-> for_loop environment memory (id,lower,upper,body) pos 
-  | TypeAnnotation (expr,_)-> expression' environment memory expr 
+  | For (id, lower, upper, body)-> for_loop environment memory (id,lower,upper,body) pos 
+  | TypeAnnotation (expr, _)-> expression' environment memory expr 
 
-and eval_list environment memory expr =
-  List.map (expression' environment memory) expr
+(** [eval_list] evaluates a list of expressions in the given environment and memory. *)
+and eval_list environment memory exprs =
+  List.map (expression' environment memory) exprs
 
 and eval_literal e =
   match Position.value e with
@@ -416,8 +411,8 @@ and eval_literal e =
 
   
 and apply_expr f x environment memory pos =
-  let vx = expression' environment memory x in
   let vf = expression' environment memory f in
+  let vx = expression' environment memory x in
   match vf with 
   (* Primitive function already implemented in OCaml*)
   | VPrimitive (_,func) -> func memory vx
@@ -431,35 +426,33 @@ and apply_expr f x environment memory pos =
     in
     (* We evaluate the body with the new environment where the pattern variables are bound *)
     expression' new_env memory body
-    
     | _ -> error [pos] "Trying to apply a non-function value."
   
+and record environment memory fields = 
+    let vfields = List.map (fun (label, expr) ->
+      (Position.value label, expression' environment memory expr)
+    ) fields in
+    VRecord vfields
     
-
-
 and field_access environment memory (expr, label) pos =
-  let v = expression' environment memory expr in
-  match value_as_record v with 
-  | None  -> error [pos] "Trying to access a field of a non-record value."
-  | Some fields -> 
-    let rec aux = function
-    | [] -> error [pos] (Printf.sprintf "Label %s not found in record." (match label.value with LId l -> l))
-    | (li, vi) :: t ->
-      if li = label.value then vi
-      else aux t
-    in aux fields
+  match value_as_record (expression' environment memory expr) with
+  | Some fields ->
+      (try List.assoc label.value fields
+       with Not_found ->
+         error [pos] (Printf.sprintf "Label %s not found in record." (match label.value with LId l -> l)))
+  | None -> error [pos] "Trying to access a field of a non-record value."
 
 
 
 
-and sequence environment memory exprs = 
+and sequence environment memory exprs =
   match exprs with
   | [] -> VUnit
-  | [e] -> expression' environment memory e
-  | e :: t -> 
-    let _ = expression' environment memory e in
-    sequence environment memory t
+  | es -> List.fold_left (fun _ e -> expression' environment memory e) VUnit es
 
+and define environment memory def expr = 
+  let new_runtime = value_definition {memory; environment} def in
+    expression' new_runtime.environment new_runtime.memory expr
 
 and reference environment memory expr =
   let v = expression' environment memory expr in
@@ -527,7 +520,7 @@ and while_loop environment memory (cond,body) pos =
     in aux memory
 
 
-and for_loop environment memory (id,lower,upper,body) pos =
+and for_loop environment memory (id, lower, upper, body) pos =
   let vlower = expression' environment memory lower in
   let vupper = expression' environment memory upper in
   match value_as_int vlower, value_as_int vupper with
@@ -561,7 +554,7 @@ and pattern pos environment value pat =
   | PTypeAnnotation (p, _) -> pattern' p environment value
   | PLiteral l ->  
     (* if it's a literal we just need to compare both values *)
-    let literal_value = eval_literal l  in
+    let literal_value = eval_literal l in
       if literal_value = value then environment 
       else raise (PatternMatchFailure pos)
  
@@ -569,14 +562,14 @@ and pattern pos environment value pat =
   | PRecord (fs, _) -> record_pattern pos environment value fs 
   | PTuple ps -> tuple pos environment value ps 
   | POr pats -> pattern_or pos environment value pats
-  | PAnd pats  -> pattern_and pos environment value pats
+  | PAnd pats -> pattern_and pos environment value pats
 
 and pattern_list environment values pats = 
   List.fold_left2 (fun env v p -> pattern' p env v) environment values pats
 
 
 and pattern_variable id environment value = 
-  let id  = Position.value id in 
+  let id = Position.value id in 
   Environment.bind environment id value 
 
 
@@ -584,7 +577,11 @@ and tagged_pattern pos environment value (constr, _, pats) =
   match value_as_tagged value with
   | None -> raise (PatternMatchFailure pos)
   | Some (k, vs) -> 
+    (* Check that the constructor matches *)
     if k <> constr.value then raise (PatternMatchFailure pos);
+    (* Check that the number of fields match *)
+    if List.length vs <> List.length pats then
+      raise (PatternMatchFailure pos);
     pattern_list environment vs pats
 
 
@@ -592,16 +589,18 @@ and record_pattern pos environment value fs =
   match value_as_record value with 
   | None -> raise (PatternMatchFailure pos )
   | Some fields ->
-     let rec aux fields pats environment = 
-      match fields,pats with 
-      | _, [] -> environment
-      | [], _ -> raise (PatternMatchFailure pos)
-      | (l1, v) :: tfields, (l2, p) :: tpats ->
-        if l1 <> Position.value l2 then raise (PatternMatchFailure pos);
-        let new_env = pattern' p environment v in
-        aux tfields tpats new_env
-     in
-     aux fields fs environment
+    (* For each field in the record pattern, we need to bind it to the corresponding value in the record *)
+    let bind_one env (lpat, p) =
+      let l = Position.value lpat in
+      try
+        (* Find the corresponding value with label*)
+        let v = List.assoc l fields in
+        (* Bind the pattern to the value *)
+        pattern' p env v
+      with Not_found ->
+        raise (PatternMatchFailure pos)
+    in
+    List.fold_left bind_one environment fs
 
 and tuple pos environment value pats = 
   match value with 
