@@ -438,16 +438,12 @@ and apply_expr f x environment memory pos =
 
 
 and field_access environment memory (expr, label) pos =
-  let v = expression' environment memory expr in
-  match value_as_record v with 
-  | None  -> error [pos] "Trying to access a field of a non-record value."
-  | Some fields -> 
-    let rec aux = function
-    | [] -> error [pos] (Printf.sprintf "Label %s not found in record." (match label.value with LId l -> l))
-    | (li, vi) :: t ->
-      if li = label.value then vi
-      else aux t
-    in aux fields
+  match value_as_record (expression' environment memory expr) with
+  | Some fields ->
+      (try List.assoc label.value fields
+       with Not_found ->
+         error [pos] (Printf.sprintf "Label %s not found in record." (match label.value with LId l -> l)))
+  | None -> error [pos] "Trying to access a field of a non-record value."
 
 
 
