@@ -34,12 +34,19 @@ let check_type_scheme :
       Position.t ->
       HopixAST.type_scheme ->
       HopixTypes.aty_scheme * HopixTypes.typing_environment
-  = fun env pos (ForallTy (ts, ty)) ->
-  failwith "Students! This is your job!"
+  = fun env pos (ForallTy (ts, ty)) -> 
+    let ts = List.map Position.value ts in
+    let env' = HopixTypes.bind_type_variables pos env ts in
+    let aty = HopixTypes.internalize_ty env' ty in
+    let aty_scheme = HopixTypes.Scheme (ts, aty) in
+    (aty_scheme, env')
 
 let synth_literal : HopixAST.literal -> HopixTypes.aty =
   fun l ->
-  failwith "Students! This is your job!"
+    match l with
+    | LInt _ -> HopixTypes.hint
+    | LString _ -> HopixTypes.hstring
+    | LChar _ -> HopixTypes.hchar
 
 let rec check_pattern :
           HopixTypes.typing_environment ->
@@ -61,7 +68,12 @@ let rec synth_expression :
       HopixAST.expression Position.located ->
       HopixTypes.aty
   = fun env Position.{ value = e; position = pos; } ->
-  failwith "Students! This is your job!"
+  match e with
+  | Literal l ->
+      synth_literal (Position.value l)
+  
+  | _ ->
+      failwith "Students! This is your job!"
 
 and check_expression :
       HopixTypes.typing_environment ->
@@ -69,14 +81,41 @@ and check_expression :
       HopixTypes.aty ->
       unit
   = fun env (Position.{ value = e; position = pos; } as exp) expected ->
-  failwith "Students! This is your job!"
+  let given = synth_expression env exp in
+  check_equal_types pos ~expected ~given
 
 and check_value_definition :
       HopixTypes.typing_environment ->
       HopixAST.value_definition ->
       HopixTypes.typing_environment
   = fun env def ->
-  failwith "Students! This is your job!"
+  match def with
+  | SimpleValue (id, type_scheme_opt, expr) ->
+      (match type_scheme_opt with
+       (* Annotated with a type scheme *)
+       | Some ts ->
+          (* verify type scheme *)
+          let (aty_scheme, _) = Position.located_pos (check_type_scheme env) ts in
+          let expected_ty = 
+            match aty_scheme with
+            | HopixTypes.Scheme (_, ty) -> ty
+          in
+          (* check expression *)
+          check_expression env expr expected_ty;
+          (* bind aty_scheme to to env *)
+          HopixTypes.bind_value (Position.value id) aty_scheme env
+       
+       | None ->
+          (* Not annotated : synth expression type *)
+          let ty = synth_expression env expr in
+          (* Generalize *)
+          let scheme = HopixTypes.generalize_type env ty in
+          HopixTypes.bind_value (Position.value id) scheme env
+      )
+  
+  | RecFunctions _ ->
+      failwith "Not implemented yet"
+
 
 let check_definition env = function
   | DefineValue vdef ->
