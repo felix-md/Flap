@@ -48,6 +48,30 @@ let synth_literal : HopixAST.literal -> HopixTypes.aty =
     | LString _ -> HopixTypes.hstring
     | LChar _ -> HopixTypes.hchar
 
+
+let synth_variable : 
+    HopixAST.identifier Position.located ->
+    HopixAST.ty  Position.located list option ->
+    Position.t ->
+    HopixTypes.typing_environment ->
+    HopixTypes.aty
+    = fun id tys_opt pos env  ->
+
+    let id_value = Position.value id in 
+    try 
+    let scheme = HopixTypes.lookup_type_scheme_of_identifier pos id_value env in
+    match tys_opt with
+    | Some ts ->
+      let args_types = List.map (HopixTypes.internalize_ty env)  ts
+    in 
+    HopixTypes.instantiate_type_scheme scheme args_types
+    | None -> HopixTypes.instantiate_type_scheme scheme []
+
+  with HopixTypes.Unbound _ ->
+    HopixTypes.type_error pos 
+      (Printf.sprintf "Unbound variable: %s" ((fun (Id s) -> s) id_value))
+   
+
 let rec check_pattern :
           HopixTypes.typing_environment ->
           HopixAST.pattern Position.located ->
@@ -71,6 +95,13 @@ let rec synth_expression :
   match e with
   | Literal l ->
       synth_literal (Position.value l)
+  | Variable (id,tys_opt) -> synth_variable id tys_opt pos env
+
+  | Apply (f,x) -> failwith "synth Apply"
+  | Fun fun_def -> failwith "synth Fun"
+  | Define (vd,e) -> failwith "synth Define"
+  | Record (l,tys_opt) -> failwith "synth Record"
+  | TypeAnnotation (e,ty) -> failwith "synth TypeAnnotation"
   
   | _ ->
       failwith "Students! This is your job!"
@@ -95,7 +126,7 @@ and check_value_definition :
        (* Annotated with a type scheme *)
        | Some ts ->
           (* verify type scheme *)
-          let (aty_scheme, _) = Position.located_pos (check_type_scheme env) ts in
+          let (aty_scheme, env) = Position.located_pos (check_type_scheme env) ts in
           let expected_ty = 
             match aty_scheme with
             | HopixTypes.Scheme (_, ty) -> ty
