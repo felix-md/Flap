@@ -69,8 +69,9 @@ let synth_variable :
 
   with HopixTypes.Unbound _ ->
     HopixTypes.type_error pos 
-      (Printf.sprintf "Unbound variable: %s" ((fun (Id s) -> s) id_value))
-   
+      (Printf.sprintf "Unbound identifier `%s'." ((fun (Id s) -> s) id_value))
+
+
 
 let rec check_pattern :
           HopixTypes.typing_environment ->
@@ -99,12 +100,22 @@ let rec synth_expression :
 
   | Apply (f,x) -> failwith "synth Apply"
   | Fun fun_def -> failwith "synth Fun"
-  | Define (vd,e) -> failwith "synth Define"
+  | Define (vd,e) -> synth_define vd e env
   | Record (l,tys_opt) -> failwith "synth Record"
   | TypeAnnotation (e,ty) -> failwith "synth TypeAnnotation"
   
   | _ ->
       failwith "Students! This is your job!"
+
+
+and synth_define : 
+    HopixAST.value_definition ->
+    HopixAST.expression Position.located ->
+    HopixTypes.typing_environment ->
+    HopixTypes.aty
+  = fun vd e env ->
+    let new_env = check_value_definition env vd in 
+    synth_expression new_env e
 
 and check_expression :
       HopixTypes.typing_environment ->
