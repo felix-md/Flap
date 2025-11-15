@@ -41,35 +41,7 @@ let check_type_scheme :
     let aty_scheme = HopixTypes.Scheme (ts, aty) in
     (aty_scheme, env')
 
-let synth_literal : HopixAST.literal -> HopixTypes.aty =
-  fun l ->
-    match l with
-    | LInt _ -> HopixTypes.hint
-    | LString _ -> HopixTypes.hstring
-    | LChar _ -> HopixTypes.hchar
 
-
-let synth_variable : 
-    HopixAST.identifier Position.located ->
-    HopixAST.ty  Position.located list option ->
-    Position.t ->
-    HopixTypes.typing_environment ->
-    HopixTypes.aty
-    = fun id tys_opt pos env  ->
-
-    let id_value = Position.value id in 
-    try 
-    let scheme = HopixTypes.lookup_type_scheme_of_identifier pos id_value env in
-    match tys_opt with
-    | Some ts ->
-      let args_types = List.map (HopixTypes.internalize_ty env)  ts
-    in 
-    HopixTypes.instantiate_type_scheme scheme args_types
-    | None -> HopixTypes.instantiate_type_scheme scheme []
-
-  with HopixTypes.Unbound _ ->
-    HopixTypes.type_error pos 
-      (Printf.sprintf "Unbound identifier `%s'." ((fun (Id s) -> s) id_value))
 
 
 
@@ -98,7 +70,7 @@ let rec synth_expression :
       synth_literal (Position.value l)
   | Variable (id,tys_opt) -> synth_variable id tys_opt pos env
 
-  | Apply (f,x) -> failwith "synth Apply"
+  | Apply (f,x) -> synth_apply f x env  
   | Fun fun_def -> failwith "synth Fun"
   | Define (vd,e) -> synth_define vd e env
   | Record (l,tys_opt) -> failwith "synth Record"
@@ -106,6 +78,57 @@ let rec synth_expression :
   
   | _ ->
       failwith "Students! This is your job!"
+
+and synth_literal : HopixAST.literal -> HopixTypes.aty =
+  fun l ->
+    match l with
+    | LInt _ -> HopixTypes.hint
+    | LString _ -> HopixTypes.hstring
+    | LChar _ -> HopixTypes.hchar
+
+
+
+
+and synth_variable : 
+    HopixAST.identifier Position.located ->
+    HopixAST.ty  Position.located list option ->
+    Position.t ->
+    HopixTypes.typing_environment ->
+    HopixTypes.aty
+    = fun id tys_opt pos env  ->
+
+    let id_value = Position.value id in 
+    try 
+      let scheme = HopixTypes.lookup_type_scheme_of_identifier pos id_value env in
+      match tys_opt with
+      | Some ts -> begin
+        let args_types = List.map (HopixTypes.internalize_ty env)  ts
+      in 
+      HopixTypes.instantiate_type_scheme scheme args_types
+    end
+      | None -> 
+        let Scheme (type_vars, _) = scheme in
+        print_int (List.length type_vars);
+
+        HopixTypes.instantiate_type_scheme scheme []
+    with HopixTypes.Unbound _ ->
+      HopixTypes.type_error pos 
+        (Printf.sprintf "Unbound identifier `%s'." ((fun (Id s) -> s) id_value))
+
+and synth_apply : 
+    HopixAST.expression Position.located ->
+    HopixAST.expression Position.located ->
+    HopixTypes.typing_environment ->
+    HopixTypes.aty
+  = fun f x env ->
+    let f_ty = synth_expression env f in 
+    match f_ty with 
+    | HopixTypes.ATyArrow (dom, cod) ->
+      check_expression env x dom; cod
+    | _ -> 
+      HopixTypes.type_error (f.position) 
+        (Printf.sprintf "Expected a function type, but got `%s'." 
+          (HopixTypes.string_of_aty f_ty))
 
 
 and synth_define : 
