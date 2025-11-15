@@ -107,8 +107,6 @@ and synth_variable :
       HopixTypes.instantiate_type_scheme scheme args_types
     end
       | None -> 
-        let Scheme (type_vars, _) = scheme in
-        print_int (List.length type_vars);
 
         HopixTypes.instantiate_type_scheme scheme []
     with HopixTypes.Unbound _ ->
