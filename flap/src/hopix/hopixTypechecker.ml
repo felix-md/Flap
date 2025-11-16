@@ -25,7 +25,35 @@ let check_equal_types pos ~expected ~given =
 let rec check_pattern_linearity
         : identifier list -> pattern Position.located -> identifier list
   = fun vars Position.{ value; position; } ->
-  failwith "Students! This is your job!"
+    match value with
+    | PWildcard | PLiteral _ -> vars
+    | PVariable id ->
+      if List.mem (id.value) vars then 
+        HopixTypes.type_error position 
+          (Printf.sprintf "Variable `%s' is bound multiple times in this pattern." 
+             (let (Id s) = id.value in s))
+      else
+        (id.value) :: vars
+    | PTypeAnnotation (pat, _) -> check_pattern_linearity vars pat
+    | PTaggedValue (_, _, pats) | PTuple pats  | PAnd pats->
+       List.fold_left check_pattern_linearity vars pats
+    | PRecord (fields, _) ->
+        List.fold_left (fun vars (_,pat) -> check_pattern_linearity vars pat) vars fields
+
+    | POr pats ->
+      (* For disjunctive patterns, we check that all branches bind the same variables *)
+      let all_set = List.map (check_pattern_linearity vars ) pats in (* List of List of vars, one per branch *)
+      if List.exists (fun branch -> branch <> List.hd all_set) all_set then 
+        HopixTypes.type_error position 
+          "In a disjunctive pattern, all branches must bind the same set of variables."
+      else
+        List.hd all_set
+      
+
+
+
+
+
 
 (** Type-checking code *)
 
@@ -42,7 +70,12 @@ let check_type_scheme :
     (aty_scheme, env')
 
 
-
+let  synth_literal : HopixAST.literal -> HopixTypes.aty =
+  fun l ->
+    match l with
+    | LInt _ -> HopixTypes.hint
+    | LString _ -> HopixTypes.hstring
+    | LChar _ -> HopixTypes.hchar
 
 
 let rec check_pattern :
@@ -51,14 +84,59 @@ let rec check_pattern :
           HopixTypes.aty ->
           HopixTypes.typing_environment
   = fun env Position.({ value = p; position = pos; } as pat) expected ->
-  failwith "Students! This is your job!"
+    let _ = check_pattern_linearity [] pat in
+    match p with 
+    | PWildcard -> env
+    | PVariable id ->
+        HopixTypes.bind_value (Position.value id) (HopixTypes.monomorphic_type_scheme expected) env 
+    | PAnd pats | POr pats ->
+        List.fold_left (fun env pat -> check_pattern env pat expected) env (pats)
+
+
+    | PLiteral _ | PTypeAnnotation _ | PTaggedValue _ | PRecord _ ->
+        let (given,env') = synth_pattern env pat in
+        check_equal_types pos ~expected ~given;
+        env'
+
+    | _ ->
+        failwith "Other cases of check_pattern not implemented yet." 
+
+
+
+
+
 
 and synth_pattern :
       HopixTypes.typing_environment ->
       HopixAST.pattern Position.located ->
       HopixTypes.aty * HopixTypes.typing_environment
-  = fun env Position.{ value = p; position = pos; } ->
-  failwith "Students! This is your job!"
+  = fun env (Position.{ value = p; position = pos; } as pat) ->
+    let _ = check_pattern_linearity [] pat in
+    match p with
+    | PLiteral l ->
+        let aty = synth_literal (Position.value l) in
+        (aty, env)
+    | PTypeAnnotation (pat,ty) ->
+        let ty = HopixTypes.internalize_ty env ty in
+        let env' = check_pattern env pat ty in
+        (ty , env')
+
+    | PTuple pats -> List.fold_left 
+      (fun (tys, env) pat ->
+        let (ty, env') = synth_pattern env pat  in
+        (ty :: tys, env')
+      ) ([], env) pats
+      |> fun (tys, env') -> (HopixTypes.ATyTuple tys, env')
+
+
+    | _ ->
+        failwith "Other cases of synth_pattern not implemented yet."
+
+
+
+
+
+
 
 let rec synth_expression :
       HopixTypes.typing_environment ->
@@ -77,14 +155,9 @@ let rec synth_expression :
   | TypeAnnotation (e,ty) -> failwith "synth TypeAnnotation"
   
   | _ ->
-      failwith "Students! This is your job!"
+      failwith "Other cases of synth_expression not implemented yet."
 
-and synth_literal : HopixAST.literal -> HopixTypes.aty =
-  fun l ->
-    match l with
-    | LInt _ -> HopixTypes.hint
-    | LString _ -> HopixTypes.hstring
-    | LChar _ -> HopixTypes.hchar
+
 
 
 
@@ -99,9 +172,11 @@ and synth_variable :
 
     let id_value = Position.value id in 
     try 
+      
       let scheme = HopixTypes.lookup_type_scheme_of_identifier pos id_value env in
       let args_types = List.map (HopixTypes.internalize_ty env) (Option.value tys_opt ~default:[]) in
       HopixTypes.instantiate_type_scheme scheme args_types
+
     with HopixTypes.Unbound _ ->
       HopixTypes.type_error pos 
         (Printf.sprintf "Unbound identifier `%s'." ((fun (Id s) -> s) id_value))
@@ -118,8 +193,7 @@ and synth_apply :
       check_expression env x dom; cod
     | _ -> 
       HopixTypes.type_error (f.position) 
-        (Printf.sprintf "Expected a function type, but got `%s'." 
-          (HopixTypes.string_of_aty f_ty))
+        (Printf.sprintf "This expression has type %s which should be a function type." (HopixTypes.string_of_aty f_ty))
 
 
 and synth_define : 
@@ -169,8 +243,68 @@ and check_value_definition :
           HopixTypes.bind_value (Position.value id) scheme env
       )
   
-  | RecFunctions _ ->
-      failwith "Not implemented yet"
+  | RecFunctions fun_defs -> check_rec_functions env fun_defs
+
+        
+and check_rec_functions : 
+      HopixTypes.typing_environment ->
+      HopixAST.function_definition polymorphic_definition list ->
+      HopixTypes.typing_environment
+  = fun env fun_defs ->
+
+    (* First we bind all function names with their type schemes and check missing annotations *)
+    let env =
+      List.fold_left
+        (fun env (id, type_scheme_opt,_) ->
+           let aty_scheme =
+             match type_scheme_opt with
+             | Some ts ->
+                let (aty_scheme, _) = Position.located_pos (check_type_scheme env) ts in
+                aty_scheme
+             | None ->
+                failwith "Function definitions must be annotated with a type scheme."
+           in
+           HopixTypes.bind_value (Position.value id) aty_scheme env
+        ) env fun_defs
+
+      in 
+      (* Then we check that the function are really of the annotated type *)
+
+      List.iter (fun (f, fs, d) ->
+        match fs with
+        | None ->
+          (* This case is now impossible cause of the previous pass *)
+           assert false
+        | Some fs ->
+           let pos = Position.position f in
+           check_function_definition pos env fs d
+      )  fun_defs;
+      env 
+
+
+
+
+and check_function_definition :
+      Position.t ->
+      HopixTypes.typing_environment ->
+      HopixAST.type_scheme Position.located ->
+      HopixAST.function_definition ->
+      unit
+  = fun pos env ts (FunctionDefinition (pat, body)) ->
+    let (aty_scheme, env) = Position.located_pos (check_type_scheme env) ts in
+    match aty_scheme with
+    | HopixTypes.Scheme (_, aty) ->
+       (match aty with
+        | HopixTypes.ATyArrow (dom, cod) ->
+           let env' = check_pattern env pat dom in
+           check_expression env' body cod
+        | _ ->
+           HopixTypes.type_error pos
+             "Function type scheme must be of arrow type."
+       )
+
+
+
 
 
 let check_definition env = function
@@ -184,6 +318,8 @@ let check_definition env = function
   | DeclareExtern (x, tys) ->
      let tys, _ = Position.located_pos (check_type_scheme env) tys in
      HopixTypes.bind_value (Position.value x) tys env
+
+
 
 let typecheck env program =
   List.fold_left
