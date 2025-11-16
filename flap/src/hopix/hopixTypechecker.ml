@@ -100,15 +100,8 @@ and synth_variable :
     let id_value = Position.value id in 
     try 
       let scheme = HopixTypes.lookup_type_scheme_of_identifier pos id_value env in
-      match tys_opt with
-      | Some ts -> begin
-        let args_types = List.map (HopixTypes.internalize_ty env)  ts
-      in 
+      let args_types = List.map (HopixTypes.internalize_ty env) (Option.value tys_opt ~default:[]) in
       HopixTypes.instantiate_type_scheme scheme args_types
-    end
-      | None -> 
-
-        HopixTypes.instantiate_type_scheme scheme []
     with HopixTypes.Unbound _ ->
       HopixTypes.type_error pos 
         (Printf.sprintf "Unbound identifier `%s'." ((fun (Id s) -> s) id_value))
