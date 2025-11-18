@@ -152,6 +152,7 @@ let rec synth_expression :
   | Fun fun_def -> failwith "synth Fun"
   | Define (vd,e) -> synth_define vd e env
   | Record (l,tys_opt) -> synth_record l tys_opt env
+  | Field (expr, label, tys_opt) -> synth_field expr label tys_opt env
   | TypeAnnotation (e,ty) -> failwith "synth TypeAnnotation"
   
   | _ ->
@@ -277,6 +278,41 @@ and synth_record :
 
     (* return the record type*)
     record_aty
+
+and synth_field :
+      HopixAST.expression Position.located ->
+      HopixAST.label Position.located ->
+      HopixAST.ty Position.located list option ->
+      HopixTypes.typing_environment ->
+      HopixTypes.aty
+  = fun expr label tys_opt env ->
+  (* Determine record type *)
+  let record_ty = synth_expression env expr in 
+  let pos = label.position in 
+  let label_id = label.value in 
+
+  (* Get constructor types *)
+  let (_, arg_tys) = HopixTypes.destruct_constructed_type pos record_ty in
+
+  (* Get the schme of the of label_id *)
+  let label_scheme = 
+    try
+      HopixTypes.lookup_type_scheme_of_label pos label_id env
+    with HopixTypes.Unbound (pos, label) ->
+      HopixTypes.type_error pos (Printf.sprintf "Unbound %s." (HopixTypes.string_of_binding label))
+  in
+
+  (* Instantiate *)
+  let arrow_ty = HopixTypes.instantiate_type_scheme label_scheme arg_tys in
+
+  let (dom, cod) = HopixTypes.destruct_function_type pos arrow_ty in
+
+  check_equal_types pos ~expected:dom ~given:record_ty;
+
+  cod
+
+
+
 
 and check_expression :
       HopixTypes.typing_environment ->
