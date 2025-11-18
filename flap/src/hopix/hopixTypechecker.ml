@@ -243,7 +243,7 @@ and synth_record :
     let given_labels = List.map (fun (l, _) -> Position.value l) fields in
     let uniq_given =
       let rec remove_dup acc = function
-        | [] -> List.rev acc
+        | [] -> acc (* List is reverse, not a problem here*)
         (* Remove duplicates *)
         | x :: xs -> if List.mem x acc then remove_dup acc xs else remove_dup (x :: acc) xs
       in
