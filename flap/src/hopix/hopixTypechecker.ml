@@ -151,7 +151,7 @@ let rec synth_expression :
   | Apply (f,x) -> synth_apply f x env  
   | Fun fun_def -> failwith "synth Fun"
   | Define (vd,e) -> synth_define vd e env
-  | Record (l,tys_opt) -> failwith "synth Record"
+  | Record (l,tys_opt) -> synth_record l tys_opt env
   | TypeAnnotation (e,ty) -> failwith "synth TypeAnnotation"
   
   | _ ->
@@ -204,6 +204,79 @@ and synth_define :
   = fun vd e env ->
     let new_env = check_value_definition env vd in 
     synth_expression new_env e
+
+and synth_record :
+    (HopixAST.label Position.located * HopixAST.expression Position.located) list ->
+    HopixAST.ty Position.located list option ->
+    HopixTypes.typing_environment ->
+    HopixTypes.aty
+  = fun fields tys_opt env ->
+
+    (* Find constructor type with first label *)
+    let (l0, _) = List.hd fields in
+    let pos = Position.position l0 in
+    let l0v = Position.value l0 in
+    let (tycon, arity, expected_labels) =
+      HopixTypes.lookup_type_constructor_of_label pos l0v env
+    in
+
+    (* Internalyze args type *)
+    (* Args type should be explicit *)
+    let arg_tys =
+      match tys_opt with
+      | None ->
+          let (HopixAST.TCon tcname) = tycon in
+          HopixTypes.type_error pos
+            (Printf.sprintf
+              "Missing type arguments for record of type %s."
+              tcname)
+      | Some tys ->
+          let atylist = List.map (HopixTypes.internalize_ty env) tys in
+          let given = List.length atylist in
+          if given <> arity then
+            invalid_instantiation pos given arity
+          else
+            atylist
+    in
+
+    (* Verify labels are valid and without duplicates *)
+    let given_labels = List.map (fun (l, _) -> Position.value l) fields in
+    let uniq_given =
+      let rec remove_dup acc = function
+        | [] -> List.rev acc
+        (* Remove duplicates *)
+        | x :: xs -> if List.mem x acc then remove_dup acc xs else remove_dup (x :: acc) xs
+      in
+      remove_dup [] given_labels
+    in
+    if List.length uniq_given <> List.length given_labels then
+      HopixTypes.type_error pos "Duplicate labels in record literal.";
+
+    let all_labels_ok =
+      List.for_all (fun l -> List.mem l expected_labels) given_labels
+    in
+    if not all_labels_ok then
+      HopixTypes.type_error pos "Unknown label in record literal.";
+
+    (* For each field, verify the expected type with destructors *)
+    let record_aty = HopixTypes.ATyCon (tycon, arg_tys) in
+    List.iter
+      (fun (lab, e) ->
+         let labv = Position.value lab in
+         (* Get the type scheme of the label *)
+         let scheme = HopixTypes.lookup_type_scheme_of_label (Position.position lab) labv env in
+         (* Apply substitution *)
+         let fun_ty = HopixTypes.instantiate_type_scheme scheme arg_tys in
+         let (dom, cod) = HopixTypes.destruct_function_type (Position.position lab) fun_ty in
+         (* Domain should be exactly the type of the instantiated record *)
+         check_equal_types (Position.position lab) ~expected:record_aty ~given:dom;
+         (* Verify that the field expression has the type of the field *)
+         check_expression env e cod
+      )
+      fields;
+
+    (* return the record type*)
+    record_aty
 
 and check_expression :
       HopixTypes.typing_environment ->
