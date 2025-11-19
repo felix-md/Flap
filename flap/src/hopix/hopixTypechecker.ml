@@ -163,11 +163,11 @@ let rec synth_expression :
   | Variable (id,tys_opt) -> synth_variable id tys_opt pos env
 
   | Apply (f,x) -> synth_apply f x env  
-  | Fun fun_def -> failwith "synth Fun"
+  | Fun fun_def -> synth_fun env fun_def
   | Define (vd,e) -> synth_define vd e env
   | Record (l,tys_opt) -> synth_record l tys_opt env
   | Field (expr, label, tys_opt) -> synth_field expr label tys_opt env
-  | TypeAnnotation (e,ty) -> failwith "synth TypeAnnotation"
+  | TypeAnnotation (e,ty) -> synth_type_annot env e ty
   
   | _ ->
       failwith "Other cases of synth_expression not implemented yet."
@@ -207,6 +207,24 @@ and synth_apply :
     | _ -> 
       HopixTypes.type_error (f.position) 
         (Printf.sprintf "This expression has type %s which should be a function type." (HopixTypes.string_of_aty f_ty))
+
+
+and synth_fun :
+      HopixTypes.typing_environment ->
+      HopixAST.function_definition ->
+      HopixTypes.aty = 
+      fun env fun_def ->
+      let FunctionDefinition (pat, expr) = fun_def in 
+      let (aty,env') = synth_pattern env pat 
+      in 
+      let body_ty = synth_expression env' expr
+      in
+       HopixTypes.ATyArrow (aty, body_ty)
+       
+
+      
+    
+
 
 
 and synth_define : 
@@ -336,6 +354,19 @@ and synth_field :
 
 
 
+and synth_type_annot :
+  HopixTypes.typing_environment ->
+  HopixAST.expression Position.located ->
+  HopixAST.ty Position.located ->
+  HopixTypes.aty = 
+  fun env expr ty ->
+    let aty = HopixTypes.internalize_ty env ty
+    in
+    check_expression env expr aty;
+    aty
+
+
+
 
 and check_expression :
       HopixTypes.typing_environment ->
@@ -343,8 +374,19 @@ and check_expression :
       HopixTypes.aty ->
       unit
   = fun env (Position.{ value = e; position = pos; } as exp) expected ->
-  let given = synth_expression env exp in
-  check_equal_types pos ~expected ~given
+  match e with
+  | Fun (FunctionDefinition (pat, body)) ->
+      (match expected with
+       | HopixTypes.ATyArrow (dom, cod) ->
+          let env' = check_pattern env pat dom in
+          check_expression env' body cod
+       | _ ->
+          let given = synth_expression env exp in
+          check_equal_types pos ~expected ~given
+      )
+  | _ ->
+      let given = synth_expression env exp in
+      check_equal_types pos ~expected ~given
 
 and check_value_definition :
       HopixTypes.typing_environment ->
