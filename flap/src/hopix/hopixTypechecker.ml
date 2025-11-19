@@ -30,7 +30,7 @@ let rec check_pattern_linearity
     | PVariable id ->
       if List.mem (id.value) vars then 
         HopixTypes.type_error position 
-          (Printf.sprintf "Variable `%s' is bound multiple times in this pattern." 
+          (Printf.sprintf "The variable %s has already appeared in this pattern." 
              (let (Id s) = id.value in s))
       else
         (id.value) :: vars
@@ -172,10 +172,18 @@ let rec synth_expression :
   | Assign (e1,e2) -> synth_assign e1 e2 env
   | Read expr -> synth_read expr env
   | Tagged (con,tys_opt,exprs) -> synth_tagged con tys_opt exprs env
+  | Sequence exprs -> synth_sequence env exprs
+  | IfThenElse (cond , t_branch, f_branch) ->
+    failwith "synth if then else" 
+
+  | Tuple exprs -> failwith "synth tuple"
+  | Case ( expr, branchs) -> synth_case env expr branchs 
+  | While (_,_) -> failwith "synth while"
+  | For (_,_,_,_) ->failwith "synth for"
 
   
-  | _ ->
-      failwith "Other cases of synth_expression not implemented yet."
+   
+      (* failwith "Other cases of synth_expression not implemented yet." *)
 
 
 and synth_variable : 
@@ -411,12 +419,15 @@ and synth_tagged :
     in
     
     (* Internalyze arg_tys *)
-    let arg_tys = 
+    (* let arg_tys = 
       match tys_opt with
       | None ->
-        HopixTypes.type_error con_pos "Missing type arguments for constructor."
+        List.map (HopixTypes.internalize_ty env) []
       | Some ts ->
         List.map (HopixTypes.internalize_ty env) ts
+    in *)
+
+    let arg_tys = List.map (HopixTypes.internalize_ty env) (Option.value ~default:[] tys_opt)
     in
 
     (* Instantiate scheme with arg_tys *)
@@ -428,23 +439,59 @@ and synth_tagged :
     in
 
     (* Destruct to argument types and return type *)
-    let (arg_tys, return_ty) = 
+    let (arg_tys', return_ty) = 
       HopixTypes.destruct_function_type_maximally con_pos arrow_type 
     in
 
     (* Verify arity of exprs and arg_tys *)
     
-    if List.length exprs <> List.length arg_tys then
+    if List.length exprs <> List.length arg_tys' then 
       HopixTypes.type_error con_pos "Invalid number of arguments provided to constructor.";
+
+
     
     (* Verify each elements of exprs with arg_tys *)
     List.iter2 (fun expr expected_ty ->
       check_expression env expr expected_ty
-    ) exprs arg_tys;
+    ) exprs arg_tys';
 
     (* synth return type *)
     return_ty
     
+
+and synth_sequence :
+      HopixTypes.typing_environment ->
+      HopixAST.expression Position.located list ->
+      HopixTypes.aty = 
+      fun env exprs->
+      let rev_exprs = List.rev exprs in
+      List.iter (fun e ->  ignore (synth_expression env e)   ) (List.tl rev_exprs);
+      synth_expression env (List.hd rev_exprs)
+
+
+and synth_case : 
+      HopixTypes.typing_environment ->
+      HopixAST.expression Position.located ->
+      HopixAST.branch Position.located list ->
+      HopixTypes.aty =
+      fun env expr branchs ->
+        let expr_ty = synth_expression env expr in
+        let branch_tys = 
+          List.map (fun Position.{ value = (Branch (pat, body)); position = pos; } ->
+            let env' = check_pattern env pat expr_ty in
+            synth_expression env' body
+          ) branchs
+        in
+        match branch_tys with
+        | [] -> HopixTypes.type_error (Position.position expr) "Case expression must have at least one branch."
+        | first_ty :: rest_tys ->
+            List.iter (fun ty ->
+              if ty <> first_ty then
+                HopixTypes.type_error (Position.position expr) "All branches of a case expression must have the same type."
+            ) rest_tys;
+            first_ty
+
+        
 
 
 
@@ -480,9 +527,21 @@ and check_expression :
           let given = synth_expression env exp in
           check_equal_types pos ~expected ~given
       )
-  | _ ->
+
+
+  | IfThenElse (cond, t_branch, f_branch) ->
+    check_expression env cond HopixTypes.hbool;
+    check_expression env t_branch expected ;
+    check_expression env f_branch expected
+
+  
+
+  
+
+
+  | Literal _ | Variable _ | For _ | _->
       let given = synth_expression env exp in
-      check_equal_types pos ~expected ~given
+      check_equal_types pos ~expected ~given 
 
 and check_value_definition :
       HopixTypes.typing_environment ->
