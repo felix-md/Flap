@@ -154,6 +154,10 @@ let rec synth_expression :
   | Record (l,tys_opt) -> synth_record l tys_opt env
   | Field (expr, label, tys_opt) -> synth_field expr label tys_opt env
   | TypeAnnotation (e,ty) -> failwith "synth TypeAnnotation"
+  | Ref expr -> synth_ref expr env
+  | Assign (e1,e2) -> synth_assign e1 e2 env
+  | Read expr -> synth_read expr env
+
   
   | _ ->
       failwith "Other cases of synth_expression not implemented yet."
@@ -311,6 +315,40 @@ and synth_field :
 
   cod
 
+and synth_ref :
+      HopixAST.expression Position.located ->
+      HopixTypes.typing_environment ->
+      HopixTypes.aty
+  = fun expr env ->
+    let expr_ty = synth_expression env expr in
+    HopixTypes.href expr_ty
+
+and synth_assign :
+      HopixAST.expression Position.located ->
+      HopixAST.expression Position.located ->
+      HopixTypes.typing_environment ->
+      HopixTypes.aty
+  = fun e1 e2 env ->
+    (* Get the reference type *)
+    let ref_ty = synth_expression env e1 in
+    let ref_pos = Position.position e1 in
+
+    (* Expected type for the content *)
+    let content_ty = HopixTypes.destruct_reference_type ref_pos ref_ty in
+    
+    (* Check if good type for content *)
+    check_expression env e2 content_ty;
+
+    HopixTypes.hunit
+
+and synth_read :
+      HopixAST.expression Position.located ->
+      HopixTypes.typing_environment ->
+      HopixTypes.aty
+  = fun expr env ->
+    let ref_ty = synth_expression env expr in
+    let ref_pos = Position.position expr in
+    HopixTypes.destruct_reference_type ref_pos ref_ty
 
 
 
