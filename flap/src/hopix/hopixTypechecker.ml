@@ -168,6 +168,11 @@ let rec synth_expression :
   | Record (l,tys_opt) -> synth_record l tys_opt env
   | Field (expr, label, tys_opt) -> synth_field expr label tys_opt env
   | TypeAnnotation (e,ty) -> synth_type_annot env e ty
+  | Ref expr -> synth_ref expr env
+  | Assign (e1,e2) -> synth_assign e1 e2 env
+  | Read expr -> synth_read expr env
+  | Tagged (con,tys_opt,exprs) -> synth_tagged con tys_opt exprs env
+
   
   | _ ->
       failwith "Other cases of synth_expression not implemented yet."
@@ -351,6 +356,97 @@ and synth_field :
   check_equal_types pos ~expected:dom ~given:record_ty;
 
   cod
+
+and synth_ref :
+      HopixAST.expression Position.located ->
+      HopixTypes.typing_environment ->
+      HopixTypes.aty
+  = fun expr env ->
+    let expr_ty = synth_expression env expr in
+    HopixTypes.href expr_ty
+
+and synth_assign :
+      HopixAST.expression Position.located ->
+      HopixAST.expression Position.located ->
+      HopixTypes.typing_environment ->
+      HopixTypes.aty
+  = fun e1 e2 env ->
+    (* Get the reference type *)
+    let ref_ty = synth_expression env e1 in
+    let ref_pos = Position.position e1 in
+
+    (* Expected type for the content *)
+    let content_ty = HopixTypes.destruct_reference_type ref_pos ref_ty in
+    
+    (* Check if good type for content *)
+    check_expression env e2 content_ty;
+
+    HopixTypes.hunit
+
+and synth_read :
+      HopixAST.expression Position.located ->
+      HopixTypes.typing_environment ->
+      HopixTypes.aty
+  = fun expr env ->
+    let ref_ty = synth_expression env expr in
+    let ref_pos = Position.position expr in
+    HopixTypes.destruct_reference_type ref_pos ref_ty
+
+and synth_tagged :
+      HopixAST.constructor Position.located ->
+      HopixAST.ty Position.located list option ->
+      HopixAST.expression Position.located list ->
+      HopixTypes.typing_environment ->
+      HopixTypes.aty
+  = fun con tys_opt exprs env ->
+    let con_pos = Position.position con in
+    let con_id = Position.value con in
+    
+    (* Get constructor scheme *)
+    let constructor_scheme = 
+      try
+        HopixTypes.lookup_type_scheme_of_constructor con_pos con_id env
+      with HopixTypes.Unbound (pos,constructor) ->
+        HopixTypes.type_error pos (Printf.sprintf "Unbound %s." (HopixTypes.string_of_binding constructor))
+    in
+    
+    (* Internalyze arg_tys *)
+    let arg_tys = 
+      match tys_opt with
+      | None ->
+        HopixTypes.type_error con_pos "Missing type arguments for constructor."
+      | Some ts ->
+        List.map (HopixTypes.internalize_ty env) ts
+    in
+
+    (* Instantiate scheme with arg_tys *)
+    let arrow_type = 
+      try
+        HopixTypes.instantiate_type_scheme constructor_scheme arg_tys
+      with HopixTypes.InvalidInstantiation { expected; given; } ->
+        invalid_instantiation con_pos given expected
+    in
+
+    (* Destruct to argument types and return type *)
+    let (arg_tys, return_ty) = 
+      HopixTypes.destruct_function_type_maximally con_pos arrow_type 
+    in
+
+    (* Verify arity of exprs and arg_tys *)
+    
+    if List.length exprs <> List.length arg_tys then
+      HopixTypes.type_error con_pos "Invalid number of arguments provided to constructor.";
+    
+    (* Verify each elements of exprs with arg_tys *)
+    List.iter2 (fun expr expected_ty ->
+      check_expression env expr expected_ty
+    ) exprs arg_tys;
+
+    (* synth return type *)
+    return_ty
+    
+
+
 
 
 
