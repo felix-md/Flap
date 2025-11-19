@@ -135,18 +135,63 @@ and synth_pattern :
         (ty , env')
       
 
-    | PTuple pats -> List.fold_left 
+    | PTuple pats -> 
+      begin
+      List.fold_left 
       (fun (tys, env) pat ->
         let (ty, env') = synth_pattern env pat  in
         (ty :: tys, env')
       ) ([], env) pats
       |> fun (tys, env') -> (HopixTypes.ATyTuple tys, env')
+      end
 
 
-    | _ ->
-        failwith "Other cases of synth_pattern not implemented yet."
+    | POr pats ->
+      begin 
+      let (first_ty, env') = synth_pattern env (List.hd pats) in
+      List.iter (fun pat ->
+        let (ty, _) = synth_pattern env' pat in
+        if ty <> first_ty then 
+          HopixTypes.type_error pos 
+            "In a disjunctive pattern, all branches must have the same type."
+      ) pats;
+      (first_ty, env')
+    end
+    | PTaggedValue (cons, tys_opt, pats) -> 
+      let  cons_scheme = 
+        try
+          HopixTypes.lookup_type_scheme_of_constructor pos cons.value env
+        with HopixTypes.Unbound (pos,constructor) ->
+          HopixTypes.type_error pos (Printf.sprintf "Unbound %s." (HopixTypes.string_of_binding constructor))
+        in
+      let arg_tys = List.map (HopixTypes.internalize_ty env) (Option.value ~default:[] tys_opt) in
+
+      let inst_ty = 
+        try
+          HopixTypes.instantiate_type_scheme cons_scheme arg_tys
+        with HopixTypes.InvalidInstantiation { expected; given; } ->
+          invalid_instantiation pos given expected
+      in
+      let (arg_tys, return_ty) = 
+        HopixTypes.destruct_function_type_maximally pos inst_ty 
+      in
+      let env' =
+        List.fold_left2 (fun env pat expected_ty ->
+          check_pattern env pat expected_ty
+        ) env pats arg_tys
+      in
+      (return_ty, env')
+
+    | PRecord (labels_pat,tys_opt) -> failwith "synth_pattern PRecord"
+
+      
 
 
+
+    | PWildcard -> failwith "synth_pattern PWildcard"
+    | PVariable _ -> failwith "synth_pattern PVariable"
+    | PAnd _ -> failwith "synth_pattern PAnd"
+    
 
 
 
@@ -176,7 +221,8 @@ let rec synth_expression :
   | IfThenElse (cond , t_branch, f_branch) ->
     failwith "synth if then else" 
 
-  | Tuple exprs -> failwith "synth tuple"
+  | Tuple exprs ->  synth_tuple env exprs
+      
   | Case ( expr, branchs) -> synth_case env expr branchs 
   | While (_,_) -> failwith "synth while"
   | For (_,_,_,_) ->failwith "synth for"
@@ -467,6 +513,18 @@ and synth_sequence :
       let rev_exprs = List.rev exprs in
       List.iter (fun e ->  ignore (synth_expression env e)   ) (List.tl rev_exprs);
       synth_expression env (List.hd rev_exprs)
+
+and synth_tuple :
+      HopixTypes.typing_environment ->
+      HopixAST.expression Position.located list ->
+      HopixTypes.aty = 
+      fun env exprs ->
+      let (tys) = List.map 
+      (fun expr -> 
+        synth_expression env expr  
+      ) exprs
+      in
+      HopixTypes.ATyTuple tys
 
 
 and synth_case : 
