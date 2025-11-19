@@ -63,11 +63,15 @@ let check_type_scheme :
       HopixAST.type_scheme ->
       HopixTypes.aty_scheme * HopixTypes.typing_environment
   = fun env pos (ForallTy (ts, ty)) -> 
-    let ts = List.map Position.value ts in
-    let env' = HopixTypes.bind_type_variables pos env ts in
-    let aty = HopixTypes.internalize_ty env' ty in
-    let aty_scheme = HopixTypes.Scheme (ts, aty) in
-    (aty_scheme, env')
+    try 
+      let ts = List.map Position.value ts in
+      let env' = HopixTypes.bind_type_variables pos env ts in
+      let aty = HopixTypes.internalize_ty env' ty in
+      let aty_scheme = HopixTypes.Scheme (ts, aty) in
+      (aty_scheme, env')
+    with HopixTypes.InvalidInstantiation ({expected=e ; given=g}) ->
+    invalid_instantiation pos g e
+      
 
 
 let  synth_literal : HopixAST.literal -> HopixTypes.aty =
@@ -98,8 +102,17 @@ let rec check_pattern :
         check_equal_types pos ~expected ~given;
         env'
 
-    | _ ->
-        failwith "Other cases of check_pattern not implemented yet." 
+    | PTuple pats ->
+      match expected with 
+      | HopixTypes.ATyTuple atys -> 
+         List.fold_left2 (
+          fun env pat expected -> 
+            check_pattern env pat expected) 
+            env pats atys
+
+      |_ -> 
+        HopixTypes.type_error pos "Wrong Tuple type" 
+          
 
 
 
@@ -120,6 +133,7 @@ and synth_pattern :
         let ty = HopixTypes.internalize_ty env ty in
         let env' = check_pattern env pat ty in
         (ty , env')
+      
 
     | PTuple pats -> List.fold_left 
       (fun (tys, env) pat ->
@@ -159,10 +173,6 @@ let rec synth_expression :
       failwith "Other cases of synth_expression not implemented yet."
 
 
-
-
-
-
 and synth_variable : 
     HopixAST.identifier Position.located ->
     HopixAST.ty  Position.located list option ->
@@ -181,6 +191,8 @@ and synth_variable :
     with HopixTypes.Unbound _ ->
       HopixTypes.type_error pos 
         (Printf.sprintf "Unbound identifier `%s'." ((fun (Id s) -> s) id_value))
+    | HopixTypes.InvalidInstantiation ({given=g; expected =e}) ->
+    invalid_instantiation pos g e
 
 and synth_apply : 
     HopixAST.expression Position.located ->
@@ -242,7 +254,7 @@ and synth_record :
 
     (* Verify labels are valid and without duplicates *)
     let given_labels = List.map (fun (l, _) -> Position.value l) fields in
-    let uniq_given =
+    let uniq_given = 
       let rec remove_dup acc = function
         | [] -> acc (* List is reverse, not a problem here*)
         (* Remove duplicates *)
@@ -260,6 +272,7 @@ and synth_record :
       HopixTypes.type_error pos "Unknown label in record literal.";
 
     (* For each field, verify the expected type with destructors *)
+    try 
     let record_aty = HopixTypes.ATyCon (tycon, arg_tys) in
     List.iter
       (fun (lab, e) ->
@@ -267,7 +280,7 @@ and synth_record :
          (* Get the type scheme of the label *)
          let scheme = HopixTypes.lookup_type_scheme_of_label (Position.position lab) labv env in
          (* Apply substitution *)
-         let fun_ty = HopixTypes.instantiate_type_scheme scheme arg_tys in
+         let fun_ty = HopixTypes.instantiate_type_scheme scheme arg_tys in 
          let (dom, cod) = HopixTypes.destruct_function_type (Position.position lab) fun_ty in
          (* Domain should be exactly the type of the instantiated record *)
          check_equal_types (Position.position lab) ~expected:record_aty ~given:dom;
@@ -275,9 +288,12 @@ and synth_record :
          check_expression env e cod
       )
       fields;
-
     (* return the record type*)
     record_aty
+
+    with HopixTypes.InvalidInstantiation ({given=g; expected = e}) ->
+    invalid_instantiation pos g e
+
 
 and synth_field :
       HopixAST.expression Position.located ->
@@ -293,6 +309,13 @@ and synth_field :
 
   (* Get constructor types *)
   let (_, arg_tys) = HopixTypes.destruct_constructed_type pos record_ty in
+
+  (* ? Should we do that *)
+
+  let inter_tys = List.map ( HopixTypes.internalize_ty env )  (Option.value ~default:[] tys_opt)
+
+  in if arg_tys <> inter_tys then 
+    HopixTypes.type_error pos (Printf.sprintf "Type given differ from expected");
 
   (* Get the schme of the of label_id *)
   let label_scheme = 
