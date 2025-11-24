@@ -182,7 +182,82 @@ and synth_pattern :
       in
       (return_ty, env')
 
-    | PRecord (labels_pat,tys_opt) -> failwith "synth_pattern PRecord"
+    | PRecord (fields, tys_opt) -> 
+      (* Get constructor type *)
+      let (l0, _) = List.hd fields in
+      let l0_pos = Position.position l0 in
+      let l0v = Position.value l0 in 
+
+      let (tycon, arity, expected_labels) =
+      try
+        HopixTypes.lookup_type_constructor_of_label l0_pos l0v env
+      with HopixTypes.Unbound (_, binding) ->
+        HopixTypes.type_error l0_pos (Printf.sprintf "There is no type definition for %s." (HopixTypes.string_of_binding binding))
+      in
+      
+      (* Handle arg types *)
+      let arg_tys =
+        match tys_opt with
+        | None ->
+             let (HopixAST.TCon tcname) = tycon in
+             HopixTypes.type_error pos
+               (Printf.sprintf "Missing type arguments for record pattern of type %s." tcname)
+        | Some ts ->
+             let atys = List.map (HopixTypes.internalize_ty env) ts in
+             let given = List.length atys in
+             if given <> arity then
+               invalid_instantiation pos given arity
+             else
+               atys
+      in
+
+      (* Verify unicity *)
+      let given_labels = List.map (fun (l, _) -> Position.value l) fields in
+      
+      (* Verify duplicate *)
+      let unique_labels = 
+         let rec dedup acc = function 
+           | [] -> acc 
+           | x :: xs -> if List.mem x acc then dedup acc xs else dedup (x::acc) xs 
+         in dedup [] given_labels 
+      in
+      if List.length unique_labels <> List.length given_labels then
+        HopixTypes.type_error pos "Duplicate labels in record pattern.";
+
+      (* Verify given_labels in expected_labels *)
+      if not (List.for_all (fun l -> List.mem l expected_labels) given_labels) then
+        HopixTypes.type_error pos "Unknown label in record pattern.";
+
+      (* Verify pattern *)
+      let record_aty = HopixTypes.ATyCon (tycon, arg_tys) in
+
+      let final_env = 
+        List.fold_left (fun curr_env (lbl_loc, sub_pat) ->
+          let lbl = Position.value lbl_loc in
+          let lbl_pos = Position.position lbl_loc in
+          
+          (* Get scheme *)
+          let lbl_scheme = 
+             try HopixTypes.lookup_type_scheme_of_label lbl_pos lbl curr_env
+             with HopixTypes.Unbound (_ , binding) -> 
+               HopixTypes.type_error lbl_pos (Printf.sprintf "Unbound %s." (HopixTypes.string_of_binding binding))
+          in
+          
+          (* Instantiate to get the concrete type of the field *)
+          let field_arrow_ty = HopixTypes.instantiate_type_scheme lbl_scheme arg_tys in
+          let (_, field_ty) = HopixTypes.destruct_function_type lbl_pos field_arrow_ty in
+          
+          (* Verify the pattern of the field with the expected type *)
+          (* Return a new environment with the variables bound in sub_pat *)
+          check_pattern curr_env sub_pat field_ty
+
+        ) env fields
+      in
+
+      (* Return the type of the record and the final environment *)
+      (record_aty, final_env)
+
+      
 
       
 
