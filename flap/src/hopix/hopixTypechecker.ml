@@ -299,8 +299,8 @@ let rec synth_expression :
   | Tuple exprs ->  synth_tuple env exprs
       
   | Case ( expr, branchs) -> synth_case env expr branchs 
-  | While (_,_) -> failwith "synth while"
-  | For (_,_,_,_) ->failwith "synth for"
+  | While (e1,e2) -> synth_while e1 e2 env
+  | For (id,e2,e3,e4) -> synth_for id e2 e3 e4 env
 
   
    
@@ -641,8 +641,29 @@ and synth_type_annot :
     check_expression env expr aty;
     aty
 
+and synth_while :
+      HopixAST.expression Position.located ->
+      HopixAST.expression Position.located ->
+      HopixTypes.typing_environment ->
+      HopixTypes.aty
+  = fun e1 e2 env ->
+    check_expression env e1 HopixTypes.hbool;
+    check_expression env e2 HopixTypes.hunit;
+    HopixTypes.hunit
 
-
+and synth_for :
+      HopixAST.identifier Position.located ->
+      HopixAST.expression Position.located ->
+      HopixAST.expression Position.located ->
+      HopixAST.expression Position.located ->
+      HopixTypes.typing_environment ->
+      HopixTypes.aty
+  = fun id e2 e3 e4 env ->
+    check_expression env e2 HopixTypes.hint;
+    check_expression env e3 HopixTypes.hint;
+    let env' = HopixTypes.bind_value (Position.value id) (HopixTypes.monomorphic_type_scheme HopixTypes.hint) env in
+    check_expression env' e4 HopixTypes.hunit;
+    HopixTypes.hunit
 
 and check_expression :
       HopixTypes.typing_environment ->
