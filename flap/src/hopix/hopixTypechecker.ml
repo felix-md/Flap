@@ -20,6 +20,57 @@ let check_equal_types pos ~expected ~given =
                             (string_of_aty expected)
                             (string_of_aty given)))
 
+(** Utility functions *)
+
+(* Generic function to instantiate both constructors and identifiers *)
+let check_instantiate : 
+    'a Position.located ->
+    HopixAST.ty Position.located list option ->
+    (Position.t -> 'a -> HopixTypes.typing_environment -> HopixTypes.aty_scheme) ->
+    HopixTypes.typing_environment -> 
+    HopixTypes.aty =
+    fun id tys_opt lookup env ->
+  let value, pos = Position.destruct id in
+  let Scheme(args, con_ty) =
+    try
+      lookup pos value env
+    with HopixTypes.Unbound (err_pos, err_cons) ->
+      HopixTypes.type_error err_pos (Printf.sprintf "Unbound %s." (HopixTypes.string_of_binding err_cons))
+  in
+
+  let args_len = List.length args in
+
+  let args_types = match tys_opt with
+  | None -> if args_len <> 0 then
+      invalid_instantiation pos 0 args_len
+    else
+      []
+  | Some tys ->
+      let given_len = List.length tys in
+      if given_len <> args_len then
+        invalid_instantiation pos given_len args_len
+      else
+        List.map (HopixTypes.internalize_ty env) tys
+  in
+
+  try
+    HopixTypes.instantiate_type_scheme (HopixTypes.Scheme (args, con_ty)) args_types
+  with HopixTypes.InvalidInstantiation {given; expected} ->
+    invalid_instantiation pos given expected
+
+(* Specialized version for constructors *)
+let check_instantiate_of_constructor id tys_opt env =
+  check_instantiate id tys_opt HopixTypes.lookup_type_scheme_of_constructor env
+
+(* Specialized version for identifiers *)
+let check_instantiate_of_identifier id tys_opt env =
+  check_instantiate id tys_opt HopixTypes.lookup_type_scheme_of_identifier env
+
+
+(* Specialized version for labels *)
+let check_instantiate_of_label label tys_opt env = 
+  check_instantiate label tys_opt HopixTypes.lookup_type_scheme_of_label env
+
 (** Linearity-checking code for patterns *)
 
 let rec check_pattern_linearity
@@ -48,12 +99,6 @@ let rec check_pattern_linearity
           "In a disjunctive pattern, all branches must bind the same set of variables."
       else
         List.hd all_set
-      
-
-
-
-
-
 
 (** Type-checking code *)
 
@@ -96,7 +141,6 @@ let rec check_pattern :
     | PAnd pats | POr pats ->
         List.fold_left (fun env pat -> check_pattern env pat expected) env (pats)
 
-
     | PLiteral _ | PTypeAnnotation _ | PTaggedValue _ | PRecord _ ->
         let (given,env') = synth_pattern env pat in
         check_equal_types pos ~expected ~given;
@@ -110,14 +154,9 @@ let rec check_pattern :
             check_pattern env pat expected) 
             env pats atys
 
-      |_ -> 
+    | _ -> 
         HopixTypes.type_error pos "Wrong Tuple type" 
           
-
-
-
-
-
 
 and synth_pattern :
       HopixTypes.typing_environment ->
@@ -133,7 +172,6 @@ and synth_pattern :
         let ty = HopixTypes.internalize_ty env ty in
         let env' = check_pattern env pat ty in
         (ty , env')
-      
 
     | PTuple pats -> 
       begin
@@ -144,7 +182,6 @@ and synth_pattern :
       ) ([], env) pats
       |> fun (tys, env') -> (HopixTypes.ATyTuple tys, env')
       end
-
 
     | POr pats ->
       begin 
@@ -158,19 +195,8 @@ and synth_pattern :
       (first_ty, env')
     end
     | PTaggedValue (cons, tys_opt, pats) -> 
-      let  cons_scheme = 
-        try
-          HopixTypes.lookup_type_scheme_of_constructor pos cons.value env
-        with HopixTypes.Unbound (pos,constructor) ->
-          HopixTypes.type_error pos (Printf.sprintf "Unbound %s." (HopixTypes.string_of_binding constructor))
-        in
-      let arg_tys = List.map (HopixTypes.internalize_ty env) (Option.value ~default:[] tys_opt) in
-
-      let inst_ty = 
-        try
-          HopixTypes.instantiate_type_scheme cons_scheme arg_tys
-        with HopixTypes.InvalidInstantiation { expected; given; } ->
-          invalid_instantiation pos given expected
+      let  inst_ty = 
+       check_instantiate_of_constructor cons tys_opt env 
       in
       let (arg_tys, return_ty) = 
         HopixTypes.destruct_function_type_maximally pos inst_ty 
@@ -183,7 +209,6 @@ and synth_pattern :
       (return_ty, env')
 
     | PRecord (fields, tys_opt) -> 
-      (* Get constructor type *)
       let (l0, _) = List.hd fields in
       let l0_pos = Position.position l0 in
       let l0v = Position.value l0 in 
@@ -215,13 +240,7 @@ and synth_pattern :
       let given_labels = List.map (fun (l, _) -> Position.value l) fields in
       
       (* Verify duplicate *)
-      let unique_labels = 
-         let rec dedup acc = function 
-           | [] -> acc 
-           | x :: xs -> if List.mem x acc then dedup acc xs else dedup (x::acc) xs 
-         in dedup [] given_labels 
-      in
-      if List.length unique_labels <> List.length given_labels then
+      if List.length (List.sort_uniq compare given_labels) <> List.length given_labels then
         HopixTypes.type_error pos "Duplicate labels in record pattern.";
 
       (* Verify given_labels in expected_labels *)
@@ -233,22 +252,11 @@ and synth_pattern :
 
       let final_env = 
         List.fold_left (fun curr_env (lbl_loc, sub_pat) ->
-          let lbl = Position.value lbl_loc in
-          let lbl_pos = Position.position lbl_loc in
+
+          let field_arrow_ty = check_instantiate_of_label lbl_loc tys_opt curr_env in
           
-          (* Get scheme *)
-          let lbl_scheme = 
-             try HopixTypes.lookup_type_scheme_of_label lbl_pos lbl curr_env
-             with HopixTypes.Unbound (_ , binding) -> 
-               HopixTypes.type_error lbl_pos (Printf.sprintf "Unbound %s." (HopixTypes.string_of_binding binding))
-          in
+          let (_, field_ty) = HopixTypes.destruct_function_type lbl_loc.position field_arrow_ty in
           
-          (* Instantiate to get the concrete type of the field *)
-          let field_arrow_ty = HopixTypes.instantiate_type_scheme lbl_scheme arg_tys in
-          let (_, field_ty) = HopixTypes.destruct_function_type lbl_pos field_arrow_ty in
-          
-          (* Verify the pattern of the field with the expected type *)
-          (* Return a new environment with the variables bound in sub_pat *)
           check_pattern curr_env sub_pat field_ty
 
         ) env fields
@@ -257,15 +265,8 @@ and synth_pattern :
       (* Return the type of the record and the final environment *)
       (record_aty, final_env)
 
-      
-
-      
-
-
-
-    | PWildcard -> failwith "synth_pattern PWildcard"
-    | PVariable _ -> failwith "synth_pattern PVariable"
-    | PAnd _ -> failwith "synth_pattern PAnd"
+    | _ -> assert false 
+    (* PWildcard, PVariable and PAnd synth are not implemented *)
     
 
 
@@ -276,12 +277,10 @@ let rec synth_expression :
       HopixTypes.typing_environment ->
       HopixAST.expression Position.located ->
       HopixTypes.aty
-  = fun env Position.{ value = e; position = pos; } ->
+  = fun env Position.{ value = e; position = _; } ->
   match e with
-  | Literal l ->
-      synth_literal (Position.value l)
-  | Variable (id,tys_opt) -> synth_variable id tys_opt pos env
-
+  | Literal l -> synth_literal (Position.value l)
+  | Variable (id,tys_opt) -> synth_variable id tys_opt  env
   | Apply (f,x) -> synth_apply f x env  
   | Fun fun_def -> synth_fun env fun_def
   | Define (vd,e) -> synth_define vd e env
@@ -293,40 +292,23 @@ let rec synth_expression :
   | Read expr -> synth_read expr env
   | Tagged (con,tys_opt,exprs) -> synth_tagged con tys_opt exprs env
   | Sequence exprs -> synth_sequence env exprs
-  | IfThenElse (cond , t_branch, f_branch) ->
-    failwith "synth if then else" 
-
+  | IfThenElse (cond , t_branch, f_branch) -> synth_if_then_else env cond t_branch f_branch
   | Tuple exprs ->  synth_tuple env exprs
-      
   | Case ( expr, branchs) -> synth_case env expr branchs 
   | While (e1,e2) -> synth_while e1 e2 env
   | For (id,e2,e3,e4) -> synth_for id e2 e3 e4 env
 
   
    
-      (* failwith "Other cases of synth_expression not implemented yet." *)
 
 
 and synth_variable : 
     HopixAST.identifier Position.located ->
     HopixAST.ty  Position.located list option ->
-    Position.t ->
     HopixTypes.typing_environment ->
     HopixTypes.aty
-    = fun id tys_opt pos env  ->
-
-    let id_value = Position.value id in 
-    try 
-      
-      let scheme = HopixTypes.lookup_type_scheme_of_identifier pos id_value env in
-      let args_types = List.map (HopixTypes.internalize_ty env) (Option.value tys_opt ~default:[]) in
-      HopixTypes.instantiate_type_scheme scheme args_types
-
-    with HopixTypes.Unbound _ ->
-      HopixTypes.type_error pos 
-        (Printf.sprintf "Unbound identifier `%s'." ((fun (Id s) -> s) id_value))
-    | HopixTypes.InvalidInstantiation ({given=g; expected =e}) ->
-    invalid_instantiation pos g e
+    = fun id tys_opt  env  ->
+    check_instantiate_of_identifier id tys_opt env
 
 and synth_apply : 
     HopixAST.expression Position.located ->
@@ -354,11 +336,6 @@ and synth_fun :
       let body_ty = synth_expression env' expr
       in
        HopixTypes.ATyArrow (aty, body_ty)
-       
-
-      
-    
-
 
 
 and synth_define : 
@@ -385,8 +362,6 @@ and synth_record :
       HopixTypes.lookup_type_constructor_of_label pos l0v env
     in
 
-    (* Internalyze args type *)
-    (* Args type should be explicit *)
     let arg_tys =
       match tys_opt with
       | None ->
@@ -405,16 +380,9 @@ and synth_record :
     in
 
     (* Verify labels are valid and without duplicates *)
-    let given_labels = List.map (fun (l, _) -> Position.value l) fields in
-    let uniq_given = 
-      let rec remove_dup acc = function
-        | [] -> acc (* List is reverse, not a problem here*)
-        (* Remove duplicates *)
-        | x :: xs -> if List.mem x acc then remove_dup acc xs else remove_dup (x :: acc) xs
-      in
-      remove_dup [] given_labels
+    let given_labels = List.map (fun (l, _) -> Position.value l) fields 
     in
-    if List.length uniq_given <> List.length given_labels then
+    if List.length (List.sort_uniq compare given_labels )<> List.length given_labels then
       HopixTypes.type_error pos "Duplicate labels in record literal.";
 
     let all_labels_ok =
@@ -437,8 +405,7 @@ and synth_record :
          (* Domain should be exactly the type of the instantiated record *)
          check_equal_types (Position.position lab) ~expected:record_aty ~given:dom;
          (* Verify that the field expression has the type of the field *)
-         check_expression env e cod
-      )
+         check_expression env e  cod)
       fields;
     (* return the record type*)
     record_aty
@@ -454,36 +421,12 @@ and synth_field :
       HopixTypes.typing_environment ->
       HopixTypes.aty
   = fun expr label tys_opt env ->
-  (* Determine record type *)
-  let record_ty = synth_expression env expr in 
   let pos = label.position in 
-  let label_id = label.value in 
-
-  (* Get constructor types *)
-  let (_, arg_tys) = HopixTypes.destruct_constructed_type pos record_ty in
-
-  (* ? Should we do that *)
-
-  let inter_tys = List.map ( HopixTypes.internalize_ty env )  (Option.value ~default:[] tys_opt)
-
-  in if arg_tys <> inter_tys then 
-    HopixTypes.type_error pos (Printf.sprintf "Type given differ from expected");
-
-  (* Get the schme of the of label_id *)
-  let label_scheme = 
-    try
-      HopixTypes.lookup_type_scheme_of_label pos label_id env
-    with HopixTypes.Unbound (pos, label) ->
-      HopixTypes.type_error pos (Printf.sprintf "Unbound %s." (HopixTypes.string_of_binding label))
+  let arrow_ty = 
+    check_instantiate_of_label label tys_opt env
   in
-
-  (* Instantiate *)
-  let arrow_ty = HopixTypes.instantiate_type_scheme label_scheme arg_tys in
-
   let (dom, cod) = HopixTypes.destruct_function_type pos arrow_ty in
-
-  check_equal_types pos ~expected:dom ~given:record_ty;
-
+  check_expression env expr dom;
   cod
 
 and synth_ref :
@@ -507,7 +450,6 @@ and synth_assign :
     (* Expected type for the content *)
     let content_ty = HopixTypes.destruct_reference_type ref_pos ref_ty in
     
-    (* Check if good type for content *)
     check_expression env e2 content_ty;
 
     HopixTypes.hunit
@@ -528,56 +470,68 @@ and synth_tagged :
       HopixTypes.typing_environment ->
       HopixTypes.aty
   = fun con tys_opt exprs env ->
-    let con_pos = Position.position con in
-    let con_id = Position.value con in
-    
-    (* Get constructor scheme *)
-    let constructor_scheme = 
-      try
-        HopixTypes.lookup_type_scheme_of_constructor con_pos con_id env
-      with HopixTypes.Unbound (pos,constructor) ->
-        HopixTypes.type_error pos (Printf.sprintf "Unbound %s." (HopixTypes.string_of_binding constructor))
-    in
-    
-    (* Internalyze arg_tys *)
-    (* let arg_tys = 
-      match tys_opt with
-      | None ->
-        List.map (HopixTypes.internalize_ty env) []
-      | Some ts ->
-        List.map (HopixTypes.internalize_ty env) ts
-    in *)
+   
 
-    let arg_tys = List.map (HopixTypes.internalize_ty env) (Option.value ~default:[] tys_opt)
-    in
-
-    (* Instantiate scheme with arg_tys *)
     let arrow_type = 
-      try
-        HopixTypes.instantiate_type_scheme constructor_scheme arg_tys
-      with HopixTypes.InvalidInstantiation { expected; given; } ->
-        invalid_instantiation con_pos given expected
-    in
+      check_instantiate_of_constructor con tys_opt env
+    in 
+
+    let con_pos = Position.position con in 
 
     (* Destruct to argument types and return type *)
     let (arg_tys', return_ty) = 
-      HopixTypes.destruct_function_type_maximally con_pos arrow_type 
+      HopixTypes.destruct_function_type_maximally (Position.position con) arrow_type 
     in
 
-    (* Verify arity of exprs and arg_tys *)
+    (* Handle argument count and type checking *)
+    let nb_given = List.length exprs in
+    let nb_expected = List.length arg_tys' in
     
-    if List.length exprs <> List.length arg_tys' then 
-      HopixTypes.type_error con_pos "Invalid number of arguments provided to constructor.";
-
-
-    
-    (* Verify each elements of exprs with arg_tys *)
-    List.iter2 (fun expr expected_ty ->
-      check_expression env expr expected_ty
-    ) exprs arg_tys';
-
-    (* synth return type *)
-    return_ty
+     if nb_given > nb_expected then begin
+      (* check what we can *)
+      List.iter2 (fun expr expected_ty ->
+        check_expression env expr expected_ty
+      ) (List.filteri (fun i _ -> i < nb_expected) exprs) arg_tys';
+      
+      (* Build the result type after consuming all expected arguments *)
+      let base_type = return_ty in
+      
+      (* Now synthesize applications for the remaining arguments *)
+      let remaining_exprs = List.filteri (fun i _ -> i >= nb_expected) exprs in
+      List.fold_left (fun acc_ty expr ->
+        (* Try to decompose acc_ty as a function type *)
+        let arg_ty, ret_ty = HopixTypes.destruct_function_type con_pos acc_ty in
+        check_expression env expr arg_ty;
+        ret_ty
+      ) base_type remaining_exprs
+    end 
+  
+   
+  else if nb_given = nb_expected then begin
+      (* Full application: check all arguments and return the final type *)
+      List.iter2 (fun expr expected_ty ->
+        check_expression env expr expected_ty
+      ) exprs arg_tys';
+      return_ty
+    end 
+  
+  
+  else begin
+      (* Partial application: check provided arguments and return remaining function type *)
+      let arg_tys_to_check, remaining_arg_tys = 
+        let rec split n acc = function
+          | [] -> (List.rev acc, [])
+          | xs when n = 0 -> (List.rev acc, xs)
+          | x :: xs -> split (n - 1) (x :: acc) xs
+        in
+        split nb_given [] arg_tys'
+      in
+      List.iter2 (fun expr expected_ty ->
+        check_expression env expr expected_ty
+      ) exprs arg_tys_to_check;
+      List.fold_right (fun arg_ty acc -> HopixTypes.ATyArrow (arg_ty, acc)) 
+        remaining_arg_tys return_ty
+    end
     
 
 and synth_sequence :
@@ -588,6 +542,20 @@ and synth_sequence :
       let rev_exprs = List.rev exprs in
       List.iter (fun e ->  ignore (synth_expression env e)   ) (List.tl rev_exprs);
       synth_expression env (List.hd rev_exprs)
+
+and synth_if_then_else :
+      HopixTypes.typing_environment ->
+      HopixAST.expression Position.located ->
+      HopixAST.expression Position.located ->
+      HopixAST.expression Position.located ->
+      HopixTypes.aty = 
+      fun env cond t_branch f_branch ->
+      check_expression env cond HopixTypes.hbool;
+      let t_ty = synth_expression env t_branch in
+      check_expression env f_branch t_ty;
+      t_ty
+
+
 
 and synth_tuple :
       HopixTypes.typing_environment ->
@@ -610,7 +578,7 @@ and synth_case :
       fun env expr branchs ->
         let expr_ty = synth_expression env expr in
         let branch_tys = 
-          List.map (fun Position.{ value = (Branch (pat, body)); position = pos; } ->
+          List.map (fun Position.{ value = (Branch (pat, body)); position = _; } ->
             let env' = check_pattern env pat expr_ty in
             synth_expression env' body
           ) branchs
@@ -623,12 +591,6 @@ and synth_case :
                 HopixTypes.type_error (Position.position expr) "All branches of a case expression must have the same type."
             ) rest_tys;
             first_ty
-
-        
-
-
-
-
 
 and synth_type_annot :
   HopixTypes.typing_environment ->
@@ -688,14 +650,9 @@ and check_expression :
     check_expression env t_branch expected ;
     check_expression env f_branch expected
 
-  
-
-  
-
-
-  | Literal _ | Variable _ | For _ | _->
-      let given = synth_expression env exp in
-      check_equal_types pos ~expected ~given 
+  | _ -> 
+    let given = synth_expression env exp in
+    check_equal_types pos ~expected ~given 
 
 and check_value_definition :
       HopixTypes.typing_environment ->
@@ -707,15 +664,12 @@ and check_value_definition :
       (match type_scheme_opt with
        (* Annotated with a type scheme *)
        | Some ts ->
-          (* verify type scheme *)
           let (aty_scheme, env) = Position.located_pos (check_type_scheme env) ts in
           let expected_ty = 
             match aty_scheme with
             | HopixTypes.Scheme (_, ty) -> ty
           in
-          (* check expression *)
           check_expression env expr expected_ty;
-          (* bind aty_scheme to to env *)
           HopixTypes.bind_value (Position.value id) aty_scheme env
        
        | None ->
