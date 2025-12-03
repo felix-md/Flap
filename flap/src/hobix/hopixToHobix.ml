@@ -109,8 +109,9 @@ let htrue =
     val _ = s1;
     ...
     val _ = s(N - 1);
-    sN
-*)
+    sN *)
+
+    
 let rec seqs = function
   | [] -> assert false
   | [e] -> e

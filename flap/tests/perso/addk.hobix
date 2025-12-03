@@ -1,0 +1,6 @@
+
+fun addk (k) = \(x) => x + k
+
+
+val main =
+    addk (5) (4)
