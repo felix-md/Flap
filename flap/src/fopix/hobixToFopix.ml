@@ -244,9 +244,27 @@ let translate (p : S.t) env =
       in
       ([], xc)
     | S.Define (vdef, a) ->
-         failwith "Students! This is your job!"
+      begin
+      match vdef with 
+      (* Not tested *)
+       | SimpleValue (id,e) -> 
+        let t_id  = identifier id in 
+        let efs, e = expression env e in 
+        let efs',e' = expression env a in 
+        efs@ efs',T.Define (t_id, e,e')
+
+       | _ -> assert false
+
+
+      end
+
+
+
     | S.Apply (a, bs) ->
-         failwith "Students! This is your job!"
+      failwith "S.Apply"
+
+      
+
     | S.IfThenElse (a, b, c) ->
       let afs, a = expression env a in
       let bfs, b = expression env b in
@@ -254,7 +272,12 @@ let translate (p : S.t) env =
       afs @ bfs @ cfs, T.IfThenElse (a, b, c)
 
     | S.Fun (x, e) ->
-         failwith "Students! This is your job!"
+      failwith "S.Fun"
+
+
+
+
+
     | S.AllocateBlock a ->
       let afs, a = expression env a in
       (afs, allocate_block a)
