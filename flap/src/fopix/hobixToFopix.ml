@@ -143,7 +143,7 @@ let free_variables =
         M.union (M.diff f_e (M.singleton id)) (fvs a)
       | _ -> 
         (* TODO: RecFunctions *)
-        assert false
+        failwith "free_variables: RecFunctions not implemented"
       end
     | S.ReadBlock (a, b) ->
        unions fvs [a; b]
@@ -228,7 +228,7 @@ let translate (p : S.t) env =
        fs @ List.map (fun (x, e) -> T.DefineValue (x, e)) defs
 
   and define_recursive_functions rdefs =
-       failwith "Students! This is your job!"
+       failwith "recursive functions not implemented"
   and expression env = function
     | S.Literal l ->
       [], T.Literal (literal l)
@@ -272,11 +272,47 @@ let translate (p : S.t) env =
       afs @ bfs @ cfs, T.IfThenElse (a, b, c)
 
     | S.Fun (x, e) ->
-      failwith "S.Fun"
-
-
-
-
+      let fvs = free_variables (S.Fun (x, e)) in 
+  
+      let clo_p = make_fresh_variable () in
+      let body_env = 
+        (* Parameters directly accessibles *)
+        let with_params = List.fold_left (fun env param ->
+          { env with vars = Dict.insert param (T.Variable (identifier param)) env.vars }
+        ) env x in
+        (* Free variables *)
+        let indexed_fvs = List.mapi (fun i fv -> (i, fv)) fvs in
+        List.fold_left (fun env_acc (i, fv) ->
+          let access = read_block (T.Variable clo_p) (lint (i + 1)) in
+          { env_acc with vars = Dict.insert fv access env_acc.vars }
+        ) with_params indexed_fvs
+      in
+      
+      (* Translate the body *)
+      let efs, body = expression body_env e in
+      
+      (* Create the toplevel function for the closure *)
+      let f = make_fresh_function_identifier () in
+      let def = T.DefineFunction (f, clo_p :: List.map identifier x, body) in
+      
+      (* Allocate the closure with the values of the free variables *)
+      let closure_expr =
+        define (allocate_block (lint (List.length fvs + 1))) (fun b ->
+          let write_code = write_block (T.Variable b) (lint 0) (T.Literal (T.LFun f)) in
+          let writes = List.mapi (fun i fv ->
+            let fv_value = match Dict.lookup fv env.vars with
+              | Some e -> e
+              (* global variable *)
+              | None -> T.Variable (identifier fv)
+            in
+            write_block (T.Variable b) (lint (i + 1)) fv_value
+          ) fvs in
+          seqs (write_code :: writes @ [T.Variable b])
+        )
+      in
+      
+      (efs @ [def], closure_expr)
+     
 
     | S.AllocateBlock a ->
       let afs, a = expression env a in
