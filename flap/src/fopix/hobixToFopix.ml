@@ -137,13 +137,23 @@ let free_variables =
       M.union f_body f_cond 
     | S.Define (vd, a) ->
       begin
-      match vd with 
-      | SimpleValue (id, e) -> 
-        let f_e = fvs e in
-        M.union f_e (M.diff (fvs a) (M.singleton id))
-      | _ -> 
-        (* TODO: RecFunctions *)
-        failwith "free_variables: RecFunctions not implemented"
+        match vd with 
+        | SimpleValue (id, e) -> 
+          let f_e = fvs e in
+          M.union f_e (M.diff (fvs a) (M.singleton id))
+        | RecFunctions fdefs ->
+          (* Get recursives func id *)
+          let fs_ids = List.map (fun (id, _) -> id) fdefs in
+          let fs_set = M.of_list fs_ids in
+          
+          (* Calculate defines free variables *)
+          let defs_fvs = unions (fun (_, e) -> fvs e) fdefs in
+          
+          (* Calculate body free variables *)
+          let body_fvs = fvs a in
+          
+          (* Everything without func ids *)
+          M.diff (M.union defs_fvs body_fvs) fs_set
       end
     | S.ReadBlock (a, b) ->
        unions fvs [a; b]
