@@ -140,7 +140,7 @@ let free_variables =
       match vd with 
       | SimpleValue (id, e) -> 
         let f_e = fvs e in
-        M.union (M.diff f_e (M.singleton id)) (fvs a)
+        M.union f_e (M.diff (fvs a) (M.singleton id))
       | _ -> 
         (* TODO: RecFunctions *)
         failwith "free_variables: RecFunctions not implemented"
@@ -188,8 +188,23 @@ type environment = {
     externals : (HobixAST.identifier, int) Dict.t;
 }
 
+let primitives = [
+    ("print_int", 1);
+    ("print_string", 1);
+    ("print", 1);
+    ("true", 0); ("false", 0); ("nothing", 0);
+    ("`+`", 2); ("`-`", 2); ("`*`", 2); ("`/`", 2);
+    ("`||`", 2); ("`&&`", 2); 
+    ("`=?`", 2); ("`<=?`", 2); ("`>=?`", 2); ("`<?`", 2); ("`>?`", 2);
+]
+
 let initial_environment () =
-  { vars = Dict.empty; externals = Dict.empty }
+  let externals = List.fold_left 
+    (fun dict (name, arity) -> Dict.insert (S.Id name) arity dict) 
+    Dict.empty 
+    primitives 
+  in
+  { vars = Dict.empty; externals = externals }
 
 let bind_external id n env =
   { env with externals = Dict.insert id n env.externals }
@@ -210,9 +225,15 @@ let arity_of_external id env =
 (** [translate p env] turns an Hobix program [p] into a Fopix program
     using [env] to retrieve contextual information. *)
 let translate (p : S.t) env =
+  let standard_library_defs = 
+    List.map (fun (name, arity) -> 
+      T.ExternalFunction (T.FunId name, arity)
+    ) primitives 
+  in
+
   let rec program env defs =
     let env, defs = ExtStd.List.foldmap definition env defs in
-    (List.flatten defs, env)
+    (standard_library_defs @ List.flatten defs, env)
   and definition env = function
     | S.DeclareExtern (id, n) ->
        let env = bind_external id n env in
@@ -239,8 +260,14 @@ let translate (p : S.t) env =
     | S.Variable x ->
       let xc =
         match Dict.lookup x env.vars with
-          | None -> T.Variable (identifier x)
-          | Some e -> e
+          | Some e -> e (* Local Var *)
+          | None -> 
+              if is_external x env then
+                (* Primitive *)
+                T.Literal (T.LFun (function_identifier x))
+              else
+                (* Global Var *)
+                T.Variable (identifier x)
       in
       ([], xc)
     | S.Define (vdef, a) ->
@@ -261,7 +288,39 @@ let translate (p : S.t) env =
 
 
     | S.Apply (a, bs) ->
-      failwith "S.Apply"
+      (* Check if a is a primitive *)
+      let is_primitive = match a with
+        | S.Variable id -> is_external id env
+        | _ -> false
+      in
+
+      if is_primitive then
+        (* Extract id *)
+        let id = match a with 
+        | S.Variable x -> x 
+        | _ -> assert false in
+
+        (* Compile args *)
+        let bfs, bs_exprs = expressions env bs in
+
+        (* Function call with primitive *)
+        (bfs, T.FunCall (function_identifier id, bs_exprs))
+
+      else
+        (* Closure *)
+        let afs, a_expr = expression env a in
+        let bfs, bs_exprs = expressions env bs in
+        
+        let call_expr = 
+          define a_expr (fun closure_id ->
+            let closure_var = T.Variable closure_id in
+            T.UnknownFunCall (
+              read_block closure_var (lint 0),
+              closure_var :: bs_exprs
+            )
+          )
+        in
+        (afs @ bfs, call_expr)
 
       
 
@@ -272,7 +331,10 @@ let translate (p : S.t) env =
       afs @ bfs @ cfs, T.IfThenElse (a, b, c)
 
     | S.Fun (x, e) ->
-      let fvs = free_variables (S.Fun (x, e)) in 
+      let raw_fvs = free_variables (S.Fun (x, e)) in 
+    
+      (* remove externals *)
+      let fvs = List.filter (fun fv -> not (is_external fv env)) raw_fvs in
   
       let clo_p = make_fresh_variable () in
       let body_env = 
