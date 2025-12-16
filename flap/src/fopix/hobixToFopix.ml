@@ -255,11 +255,33 @@ let translate (p : S.t) env =
        let fs, e = expression (reset_vars env) e in
        fs @ [T.DefineValue (identifier x, e)]
     | S.RecFunctions fdefs ->
-       let fs, defs = define_recursive_functions fdefs in
-       fs @ List.map (fun (x, e) -> T.DefineValue (x, e)) defs
+      (* env to define_recursive_functions to see if there is externals*)
+      let fs, defs = define_recursive_functions env fdefs in
+      fs @ List.map (fun (x, e) -> T.DefineValue (x, e)) defs
 
-  and define_recursive_functions rdefs =
-       failwith "recursive functions not implemented"
+  and define_recursive_functions env fdefs =
+    let (global_funs, allocs, inits) = compile_recursive_group env fdefs in
+    
+    (* allocations : val ptr_f = allocate(...) *)
+    let defs_allocs = List.map (fun (ptr, alloc_expr) -> 
+      T.DefineValue (ptr, alloc_expr)
+    ) allocs in
+
+    (* init : val _ = (write... ; write...) *)
+    let def_writes = 
+      if inits = [] then [] 
+      else [T.DefineValue (make_fresh_variable (), seqs inits)] 
+    in
+    
+    (* Combine func code, allocations, and inits *)
+    let fs = global_funs @ defs_allocs @ def_writes in
+
+    (* Binding : defs list *)
+    let defs = List.map2 (fun (id, _) (ptr, _) ->
+      (identifier id, T.Variable ptr)
+    ) fdefs allocs in
+
+    (fs, defs)
   and expression env = function
     | S.Literal l ->
       [], T.Literal (literal l)
@@ -282,15 +304,44 @@ let translate (p : S.t) env =
       ([], xc)
     | S.Define (vdef, a) ->
       begin
-      match vdef with 
-      (* Not tested *)
-       | SimpleValue (id,e) -> 
-        let t_id  = identifier id in 
-        let efs, e = expression env e in 
-        let efs',e' = expression env a in 
-        efs@ efs',T.Define (t_id, e,e')
+        match vdef with
+        | SimpleValue (id,e) -> 
+          let t_id  = identifier id in 
+          let efs, e = expression env e in 
+          
+          (* Add id to env*)
+          let env_body = { env with vars = Dict.insert id (T.Variable t_id) env.vars } in
 
-       | _ -> assert false
+          (* use the new env to *)
+          let efs', e' = expression env_body a in 
+          efs @ efs',T.Define (t_id, e,e')
+
+        | RecFunctions fdefs ->
+          (* compile rec func *)
+          let (global_funs, allocs, inits) = compile_recursive_group env fdefs in
+          
+          (* Rebuild env_body : ptrs and ids in the order *)
+          let ptrs = List.map fst allocs in
+          let ids = List.map (fun (id, _) -> id) fdefs in
+          let env_body = List.fold_left2 (fun e id ptr -> 
+              { e with vars = Dict.insert id (T.Variable ptr) e.vars }
+          ) env ids ptrs in
+
+          (* compile a with new env *)
+          let afs, expr_a = expression env_body a in
+
+          (* Assemble : Alloc -> ... -> Alloc -> Init -> ... -> Init -> A *)
+          let body_with_inits = 
+            if inits = [] then expr_a
+            else seq (seqs inits) expr_a
+          in
+          
+          (* Wrap every ptr with T.Define *)
+          let expr_final = List.fold_right (fun (ptr, alloc_expr) acc ->
+            T.Define (ptr, alloc_expr, acc)
+          ) allocs body_with_inits in
+          
+          (global_funs @ afs, expr_final)
 
 
       end
@@ -434,5 +485,70 @@ let translate (p : S.t) env =
 
   and function_identifier (S.Id x) = T.FunId x
 
+  (* Helper: Compile un groupe de fonctions mutuellement récursives *)
+  (* Retourne : 
+    - les définitions de fonctions globales (le code)
+    - une liste (variable_fopix, expression_allocation)
+    - une liste d'expressions d'initialisation (les write_block)
+  *)
+  and compile_recursive_group env fdefs =
+    (* Prepare pointers for each function *)
+    let fs_ids = List.map (fun (id, _) -> id) fdefs in
+    let ptrs = List.map (fun _ -> make_fresh_variable ()) fdefs in
+
+    (* Create recursive env *)
+    let rec_env = List.fold_left2 (fun env id ptr ->
+      { env with vars = Dict.insert id (T.Variable ptr) env.vars }
+    ) env fs_ids ptrs in
+
+    (* treat each func *)
+    List.fold_left2 (fun (glob_acc, alloc_acc, init_acc) (_, expr) ptr ->
+      match expr with 
+      | S.Fun (args, body) ->
+          (* calculate free variables *)
+          let raw_fvs = free_variables expr in
+          (* remove externals *)
+          let fvs = List.filter (fun fv -> not (is_external fv env)) raw_fvs in
+          (* compile body *)
+          let self_id = make_fresh_variable () in
+          let body_env = 
+            let env_args = List.fold_left (fun env arg ->
+              { env with vars = Dict.insert arg (T.Variable (identifier arg)) env.vars }
+            ) rec_env args in
+            
+            List.fold_left (fun env (i, fv) ->
+              let access = read_block (T.Variable self_id) (lint (i + 1)) in
+              { env with vars = Dict.insert fv access env.vars }
+            ) env_args (List.mapi (fun i fv -> (i, fv)) fvs)
+          in
+
+          let bfs, compiled_body = expression body_env body in
+          
+          (* Create global function *)
+          let fun_label = make_fresh_function_identifier () in
+          let global_def = T.DefineFunction (fun_label, self_id :: List.map identifier args, compiled_body) in
+
+          (* Allocation of right size *)
+          let alloc_expr = allocate_block (lint (List.length fvs + 1)) in
+
+          (* Init *)
+          let write_code = write_block (T.Variable ptr) (lint 0) (T.Literal (T.LFun fun_label)) in
+          let writes = List.mapi (fun i fv ->
+              let val_expr = match Dict.lookup fv rec_env.vars with
+                | Some e -> e
+                | None -> failwith ("Variable not found in recursive closure: " ^ (match fv with S.Id s -> s))
+              in
+              write_block (T.Variable ptr) (lint (i + 1)) val_expr
+          ) fvs in
+          
+          (* Accumulate *)
+          ( glob_acc @ bfs @ [global_def],
+            alloc_acc @ [(ptr, alloc_expr)],
+            init_acc @ [write_code] @ writes )
+
+      | _ -> failwith "Recursive definitions must be functions"
+    ) ([], [], []) fdefs ptrs
+
   in
+
   program env p
