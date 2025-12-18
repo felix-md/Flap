@@ -101,18 +101,37 @@ let rec seqs = function
   | [] -> assert false
   | [x] -> x
   | x :: xs -> seq x (seqs xs)
-
 let allocate_block e =
-  T.(FunCall (FunId "allocate_block", [e]))
-
+  T.(FunCall (FunId "allocate_block", [e])) 
 let write_block e i v =
   T.(FunCall (FunId "write_block", [e; i; v]))
-
+    
 let read_block e i =
   T.(FunCall (FunId "read_block", [e; i]))
-
+  
 let lint i =
   T.(Literal (LInt (Int64.of_int i)))
+  
+let primitives = [
+    "print_int";
+    "print_string";
+    "true"; "false"; "nothing";
+    "`+`"; "`-`"; "`*`"; "`/`";
+    "`||`"; "`&&`"; 
+    "`=?`"; "`<=?`"; "`>=?`"; "`<?`"; "`>?`";
+]
+let is_primitive (S.Id id) =
+  
+  List.mem id primitives
+
+let arity_of_primitive = function 
+   | (S.Id id) ->
+          match id with
+          | "print_string" | "print_int" -> 1
+          | "true" | "false" | "nothing" -> 0
+          | s when FopixInterpreter.is_binary_primitive s -> 2
+          | _ -> assert false
+    | _ -> assert false
 
 
 (** [free_variables e] returns the list of free variables that
@@ -130,7 +149,7 @@ let free_variables =
     | S.Literal _ ->
        M.empty
     | S.Variable x ->
-       M.singleton x
+       if is_primitive x then M.empty else M.singleton x
     | S.While (cond, e) ->
       let f_cond = fvs cond in 
       let f_body = fvs e in 
@@ -198,23 +217,9 @@ type environment = {
     externals : (HobixAST.identifier, int) Dict.t;
 }
 
-let primitives = [
-    ("print_int", 1);
-    ("print_string", 1);
-    ("print", 1);
-    ("true", 0); ("false", 0); ("nothing", 0);
-    ("`+`", 2); ("`-`", 2); ("`*`", 2); ("`/`", 2);
-    ("`||`", 2); ("`&&`", 2); 
-    ("`=?`", 2); ("`<=?`", 2); ("`>=?`", 2); ("`<?`", 2); ("`>?`", 2);
-]
 
 let initial_environment () =
-  let externals = List.fold_left 
-    (fun dict (name, arity) -> Dict.insert (S.Id name) arity dict) 
-    Dict.empty 
-    primitives 
-  in
-  { vars = Dict.empty; externals = externals }
+  { vars = Dict.empty; externals = Dict.empty }
 
 let bind_external id n env =
   { env with externals = Dict.insert id n env.externals }
@@ -223,7 +228,7 @@ let is_external id env =
   Dict.lookup id env.externals <> None
 
 let reset_vars env =
-   { env with vars = Dict.empty }
+  { env with vars = Dict.empty }
 
 (** Precondition: [is_external id env = true]. *)
 let arity_of_external id env =
@@ -235,15 +240,10 @@ let arity_of_external id env =
 (** [translate p env] turns an Hobix program [p] into a Fopix program
     using [env] to retrieve contextual information. *)
 let translate (p : S.t) env =
-  let standard_library_defs = 
-    List.map (fun (name, arity) -> 
-      T.ExternalFunction (T.FunId name, arity)
-    ) primitives 
-  in
 
   let rec program env defs =
     let env, defs = ExtStd.List.foldmap definition env defs in
-    (standard_library_defs @ List.flatten defs, env)
+    ( List.flatten defs, env)
   and definition env = function
     | S.DeclareExtern (id, n) ->
        let env = bind_external id n env in
@@ -291,15 +291,12 @@ let translate (p : S.t) env =
        cfs @ efs, T.While (cond, e)
     | S.Variable x ->
       let xc =
-        match Dict.lookup x env.vars with
-          | Some e -> e (* Local Var *)
-          | None -> 
-              if is_external x env then
-                (* Primitive *)
-                T.Literal (T.LFun (function_identifier x))
-              else
-                (* Global Var *)
-                T.Variable (identifier x)
+        if is_primitive x || is_external x env then
+          (* Primitive or external *)
+          T.Literal (T.LFun (function_identifier x))
+        else match Dict.lookup x env.vars with
+          | Some e -> e (* Local variable *)
+          | None -> T.Variable (identifier x) (* Global Variable *)
       in
       ([], xc)
     | S.Define (vdef, a) ->
@@ -349,39 +346,22 @@ let translate (p : S.t) env =
 
 
     | S.Apply (a, bs) ->
-      (* Check if a is a primitive *)
-      let is_primitive = match a with
-        | S.Variable id -> is_external id env
-        | _ -> false
+
+      let process_primitive_args = function
+        | S.Variable e when (is_primitive e) -> replace_primitive_pointer e (arity_of_primitive e)
+        | e -> e
       in
 
-      if is_primitive then
-        (* Extract id *)
-        let id = match a with 
-        | S.Variable x -> x 
-        | _ -> assert false in
-
-        (* Compile args *)
-        let bfs, bs_exprs = expressions env bs in
-
-        (* Function call with primitive *)
-        (bfs, T.FunCall (function_identifier id, bs_exprs))
-
-      else
-        (* Closure *)
-        let afs, a_expr = expression env a in
-        let bfs, bs_exprs = expressions env bs in
-        
-        let call_expr = 
-          define a_expr (fun closure_id ->
-            let closure_var = T.Variable closure_id in
-            T.UnknownFunCall (
-              read_block closure_var (lint 0),
-              closure_var :: bs_exprs
-            )
-          )
-        in
-        (afs @ bfs, call_expr)
+      let bs = List.map process_primitive_args bs in
+      let afs, a_expr = expression env a in
+      let bfs, bs_exprs = expressions env bs in
+      begin
+      match a_expr with 
+      | T.Literal (T.LFun f_id) ->
+        afs @ bfs,
+        T.FunCall (f_id, bs_exprs)
+      | e ->  afs @ bfs, T.UnknownFunCall (read_block e (lint 0), e::bs_exprs)
+      end
 
       
 
@@ -507,8 +487,8 @@ let translate (p : S.t) env =
       | S.Fun (args, body) ->
           (* calculate free variables *)
           let raw_fvs = free_variables expr in
-          (* remove externals *)
-          let fvs = List.filter (fun fv -> not (is_external fv env)) raw_fvs in
+          (* remove externals and primitives *)
+          let fvs = List.filter (fun fv -> not (is_external fv env) && not (is_primitive fv)) raw_fvs in
           (* compile body *)
           let self_id = make_fresh_variable () in
           let body_env = 
@@ -548,6 +528,13 @@ let translate (p : S.t) env =
 
       | _ -> failwith "Recursive definitions must be functions"
     ) ([], [], []) fdefs ptrs
+
+
+  and replace_primitive_pointer id arity = 
+    let args = List.init arity (fun i -> (S.Id (Printf.sprintf "arg%d" i))) in
+    let call_args = List.map (fun x -> S.Variable x) args in
+    S.Fun(args, S.Apply (S.Variable id, call_args))
+
 
   in
 
