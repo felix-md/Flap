@@ -465,11 +465,10 @@ let translate (p : S.t) env =
 
   and function_identifier (S.Id x) = T.FunId x
 
-  (* Helper: Compile un groupe de fonctions mutuellement récursives *)
-  (* Retourne : 
-    - les définitions de fonctions globales (le code)
-    - une liste (variable_fopix, expression_allocation)
-    - une liste d'expressions d'initialisation (les write_block)
+  (* Return triplet : 
+    - global_funs : T.definition list , top level function definitions
+    - allocs : (T.identifier * T.expression) list, pair of pointer and allocation expression
+    - inits : T.expression list, initialization code to write closure values 
   *)
   and compile_recursive_group env fdefs =
     (* Prepare pointers for each function *)
@@ -529,7 +528,7 @@ let translate (p : S.t) env =
       | _ -> failwith "Recursive definitions must be functions"
     ) ([], [], []) fdefs ptrs
 
-
+  (* Transform primitive into lambda*)
   and replace_primitive_pointer id arity = 
     let args = List.init arity (fun i -> (S.Id (Printf.sprintf "arg%d" i))) in
     let call_args = List.map (fun x -> S.Variable x) args in
