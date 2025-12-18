@@ -1,0 +1,14 @@
+val curry =
+    \(f) =>
+    \(x) =>
+    \(y) => f (x,y)
+
+
+val g = \(x,y) => x + y
+
+
+
+
+val main = 
+    (curry (g)) (1) (4)
+    

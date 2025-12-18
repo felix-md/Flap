@@ -1,0 +1,8 @@
+fun apply (f,x) =  f (x)
+
+
+fun g (x) = x + 1
+
+
+val main =
+    apply (g, 3)
