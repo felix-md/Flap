@@ -1,0 +1,35 @@
+def add_eight_int2 (x7,x8)
+local sum:
+    f1: sum <- add sum, %rdi;
+
+    f2: sum <- add sum, %rsi;
+    f3: sum <- add sum, %rdx;
+    f4: sum <- add sum, %rcx;
+    f5: sum <- add sum, %r8;
+    f6: sum <- add sum, %r9;
+
+    f7: sum <- add sum, x7;
+    f8: sum <- add sum, x8;
+
+    f9: %rax <- copy sum;
+
+    f10: ret;
+end
+
+globals ()
+    l00: %rdi <- copy 1;
+    l01: %rsi <- copy 2;
+    l02: %rdx <- copy 3;
+    l03: %rcx <- copy 4;
+    l04: %r8  <- copy 5;
+    l05: %r9  <- copy 6;
+
+    l06: add_eight_int2(7,8);
+
+    l07: %rdi <- copy %rax;
+
+    l08: observe_int();
+
+    l09: exit;
+
+end
