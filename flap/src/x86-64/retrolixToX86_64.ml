@@ -641,32 +641,27 @@ module FrameManager(IS : InstructionSelector) : FrameManager =
       + (if empty_frame fd then 0 else 1) * Mint.size_in_bytes
       + fd.locals_space
 
+    let add_stack_vars stack start_offset step vars =
+        snd (List.fold_left 
+          (fun (offset, acc) var -> 
+            (Mint.add offset step, S.IdMap.add var offset acc))
+          (start_offset, stack)
+          vars)
 
     let add_params stack params = 
-       let rec aux stack offset = function
-      | [] -> stack
-      | h::t -> aux (S.IdMap.add h offset stack) (Mint.add offset 8L) t
-      in
       (* 16 car RBP a 0 et adresse de retour à 8 *)
-      aux stack 16L params
+      add_stack_vars stack 16L 8L params
 
     let add_locals stack locals =
-       let rec aux stack offset = function
-      | [] -> stack
-      | h::t -> aux (S.IdMap.add h offset stack) (Mint.sub offset 8L) t
-      in
-      (* Les locales sont sous RBP : -8, -16, -24, etc. *)
-      aux stack (-8L) locals
-
-
-
+      (* Les locales sont sous RBP : -8, -16, -24, etc. *)      
+      add_stack_vars stack (-8L) (-8L) locals
 
     let frame_descriptor ~params ~locals =
       let stack = S.IdMap.empty in 
       let stack = add_params stack params in
       let stack = add_locals stack locals in
       let param_count = List.length params in
-      let locals_space = List.length locals * 8 in  (* 8 bytes per local *)
+      let locals_space = List.length locals * 8 in 
       { param_count; locals_space; stack_map = stack; }
 
     let location_of fd id =
