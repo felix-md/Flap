@@ -16,11 +16,11 @@ void print_string(const char* s) {
 }
 
 void print_int(int64_t n) {
-    fprintf(stderr, "Students! This is your job!\n");
+  fprintf(stdout,"%ld", n);
 }
 
 void observe_int(int64_t n) {
-  print_int(n);
+  exit(n);
 }
 
 intptr_t* allocate_block (int64_t n) {
@@ -34,4 +34,9 @@ intptr_t read_block (intptr_t* block, int64_t n) {
 int64_t write_block (intptr_t* block, int64_t n, intptr_t v) {
   block[n] = v;
   return 0;
+}
+
+int64_t add_eight_int(int64_t a0, int64_t a1, int64_t a2, int64_t a3,
+                        int64_t a4, int64_t a5, int64_t a6, int64_t a7) {
+  return a0 + a1 + a2 + a3 + a4 + a5 + a6 + a7;
 }

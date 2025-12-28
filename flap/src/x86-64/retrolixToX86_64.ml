@@ -397,6 +397,7 @@ module Codegen(IS : InstructionSelector)(FM : FrameManager) =
 
     let translate_fun_def ~name ?(desc = "") ~params ~locals gen_body =
       let open T in
+      
 
       let fd = FM.frame_descriptor ~params ~locals in
 
@@ -510,14 +511,25 @@ module InstructionSelector : InstructionSelector =
         T.insns [T.movq ~src ~dst]
 
     let bin ins ~dst ~srcl ~srcr =
-      (mov ~dst ~src:srcl) @
-
-      match dst, srcr with
-      | `Addr _, `Addr _ ->
-        T.insns [T.movq ~src:srcr ~dst:scratch;
-         ins ~src:scratch ~dst]
-      | _ ->
-        T.insns [ins ~src:srcr ~dst]
+      (* Charger srcl dans dst *)
+      let code = mov ~dst ~src:srcl in
+      
+      (* Appliquer l'opération : dst = dst OP srcr *)
+      let code = code @
+        match dst, srcr with
+        | `Addr _, `Addr _ ->
+          (* Les deux en mémoire : charger srcr dans scratch puis opérer *)
+          T.insns [T.movq ~src:srcr ~dst:scratch;
+                   ins ~src:scratch ~dst]
+        | `Addr _, _ | _, `Addr _ ->
+          (* L'un des deux en mémoire : on peut faire l'opération directement
+             car x86-64 autorise une opérande mémoire si l'autre est registre *)
+          T.insns [ins ~src:srcr ~dst]
+        | _ ->
+          (* Aucun en mémoire : opération directe *)
+          T.insns [ins ~src:srcr ~dst]
+      in
+      code
 
     let add ~dst ~srcl ~srcr =
       bin T.addq ~dst ~srcl ~srcr
@@ -526,10 +538,32 @@ module InstructionSelector : InstructionSelector =
       bin T.subq ~dst ~srcl ~srcr
 
     let mul ~dst ~srcl ~srcr =
-      bin T.imulq ~dst ~srcl ~srcr
+      (* imul a une contrainte : la destination DOIT être un registre.
+         On doit charger dans scratch, multiplier, puis stocker. *)
+      match dst with
+      | `Reg _ ->
+          (* Destination est un registre : on peut utiliser bin normalement *)
+          bin T.imulq ~dst ~srcl ~srcr
+      | `Addr _ ->
+          (* Destination est en mémoire : utiliser scratch comme intermédiaire *)
+          let code = mov ~dst:scratch ~src:srcl in
+          let code = code @
+            (match srcr with
+             | `Addr _ ->
+                 (* srcr en mémoire : le charger d'abord dans un registre *)
+                 (* On ne peut pas réutiliser scratch, utilisons %rax *)
+                 let rax = `Reg X86_64_Architecture.RAX in
+                 T.insns [T.movq ~src:srcr ~dst:rax;
+                          T.imulq ~src:rax ~dst:scratch]
+             | _ ->
+                 (* srcr est registre ou immediat : on peut multiplier directement *)
+                 T.insns [T.imulq ~src:srcr ~dst:scratch]
+            )
+          in
+          code @ T.insns [T.movq ~src:scratch ~dst]
 
     let div ~dst ~srcl ~srcr =
-      failwith "Students! This is your job!"
+      failwith "Students! This is your job! div"
 
     let andl ~dst ~srcl ~srcr =
       bin T.andq ~dst ~srcl ~srcr
@@ -538,10 +572,10 @@ module InstructionSelector : InstructionSelector =
       bin T.orq ~dst ~srcl ~srcr
 
     let conditional_jump ~cc ~srcl ~srcr ~ll ~lr =
-      failwith "Students! This is your job!"
+      failwith "Students! This is your job! conditional_jump"
 
     let switch ?default ~discriminant ~cases () =
-      failwith "Students! This is your job!"
+      failwith "Students! This is your job! switch"
 
   end
 
@@ -576,7 +610,7 @@ module FrameManager(IS : InstructionSelector) : FrameManager =
 
     let location_of fd id =
       let label_string = data_label_of_global id in
-      T.addr ~offset:(T.Lab label_string) ()
+      T.addr ~offset:(T.Lab label_string) ~base:X86_64_Architecture.RIP ()
 
     let function_prologue fd =
       (* Student! Implement me! *)
@@ -587,7 +621,48 @@ module FrameManager(IS : InstructionSelector) : FrameManager =
       []
 
     let call fd ~kind ~f ~args =
-      failwith "Students! This is your job!"
+      let open T in
+      let open X86_64_Architecture in
+      
+      (* Préparation des registres pour arguments *)
+      let registers_for_params = List.map (fun r -> `Reg r) argument_passing_registers in
+
+      (* Conservation des registres utilisés *)
+      let backup_instructions = List.map (function `Reg r -> Instruction (pushr ~reg:r)) registers_for_params in
+
+      (* Empilement des paramètres *)
+      let stack_params = List.rev_map (fun param -> Instruction (pushq ~src:param)) args in
+
+      (* Calcul de la taille occupée *)
+      let params_size = List.length args * 8 in 
+      let misalignment = (fd.locals_space + params_size) mod 16 in
+      let alignment_fix =
+        if misalignment <> 0 then 
+          [Instruction (subq ~src:(liti (16 - misalignment)) ~dst:rsp)]
+        else 
+          []
+        in 
+
+        (* Instruction d'appel *)
+        let function_call = Instruction (calldi ~tgt:f) in
+
+        (* Récupération des registres *)
+        let recovery_instructions = List.map (function `Reg r -> Instruction (popr ~reg:r)) (List.rev registers_for_params) in
+
+        (* Libération de la pile *)
+        let stack_cleanup =
+        let padding = if misalignment <> 0 then 16 - misalignment else 0 in
+        [Instruction (addq ~src:(liti (params_size + padding)) ~dst:rsp)]
+      in
+      
+     
+        match kind with
+        | `Normal ->
+            backup_instructions @ alignment_fix @ stack_params @ [function_call] @ stack_cleanup @ recovery_instructions
+        | `Tail ->
+            (* Appel terminal : nettoyage puis saut *)
+            function_epilogue fd @ [Instruction (jmpdi ~tgt:f)]
+      
 
   end
 
