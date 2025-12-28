@@ -563,7 +563,18 @@ module InstructionSelector : InstructionSelector =
           code @ T.insns [T.movq ~src:scratch ~dst]
 
     let div ~dst ~srcl ~srcr =
-      failwith "Students! This is your job! div"
+      let open X86_64_Architecture in 
+      let r = fun reg -> `Reg reg in
+      (* RDX doit contenir 0 *)
+      mov ~src:(`Imm (Lit 0L)) ~dst:(r RDX) @
+      mov ~src:srcl ~dst:(r RAX) @
+      (* on mov dans R10  car idivq ne prends pas d'immédiat *)
+      mov ~src:srcr ~dst:(r R10) @
+      [Instruction (idivq ~src:(r R10))] @
+      mov ~src:(r RAX) ~dst:dst 
+
+
+      
 
     let andl ~dst ~srcl ~srcr =
       bin T.andq ~dst ~srcl ~srcr
@@ -571,11 +582,37 @@ module InstructionSelector : InstructionSelector =
     let orl ~dst ~srcl ~srcr =
       bin T.orq ~dst ~srcl ~srcr
 
+    let compare ~srcl ~srcr =
+      (* cmpq src1, src2 calcule src2 - src1 
+         Pour tester srcl OP srcr, on doit faire cmpq srcr, srcl *)
+      match srcl with 
+      | `Reg _ -> [Instruction (cmpq ~src1:srcr ~src2:srcl)]
+      | `Imm _ | `Addr _ ->
+        mov ~src:srcl ~dst:scratch @ [Instruction (cmpq ~src1:srcr ~src2:scratch)]
+
     let conditional_jump ~cc ~srcl ~srcr ~ll ~lr =
-      failwith "Students! This is your job! conditional_jump"
+      compare ~srcl ~srcr @ 
+      [Instruction (jccl ~cc ~tgt:ll)] @
+       [Instruction (jmpl ~tgt:lr)]
 
     let switch ?default ~discriminant ~cases () =
-      failwith "Students! This is your job! switch"
+     
+      let rec generate_comparisons idx =
+        if idx >= Array.length cases then
+          match default with
+          | Some lbl -> [Instruction (jmpl ~tgt:lbl)]
+          | None -> []
+        else
+          let lbl = cases.(idx) in
+          compare ~srcl:discriminant ~srcr:(`Imm (Lit (Int64.of_int idx))) @
+          [Instruction (jccl ~cc:E ~tgt:lbl)] @
+          generate_comparisons (idx + 1)
+      in
+      generate_comparisons 0
+    
+
+
+
 
   end
 
@@ -604,32 +641,68 @@ module FrameManager(IS : InstructionSelector) : FrameManager =
       + (if empty_frame fd then 0 else 1) * Mint.size_in_bytes
       + fd.locals_space
 
+
+    let add_params stack params = 
+       let rec aux stack offset = function
+      | [] -> stack
+      | h::t -> aux (S.IdMap.add h offset stack) (Mint.add offset 8L) t
+      in
+      (* 16 car RBP a 0 et adresse de retour à 8 *)
+      aux stack 16L params
+
+    let add_locals stack locals =
+       let rec aux stack offset = function
+      | [] -> stack
+      | h::t -> aux (S.IdMap.add h offset stack) (Mint.sub offset 8L) t
+      in
+      (* Les locales sont sous RBP : -8, -16, -24, etc. *)
+      aux stack (-8L) locals
+
+
+
+
     let frame_descriptor ~params ~locals =
-      (* Student! Implement me! *)
-      { param_count = 0; locals_space = 0; stack_map = S.IdMap.empty; }
+      let stack = S.IdMap.empty in 
+      let stack = add_params stack params in
+      let stack = add_locals stack locals in
+      let param_count = List.length params in
+      let locals_space = List.length locals * 8 in  (* 8 bytes per local *)
+      { param_count; locals_space; stack_map = stack; }
 
     let location_of fd id =
-      let label_string = data_label_of_global id in
-      T.addr ~offset:(T.Lab label_string) ~base:X86_64_Architecture.RIP ()
+      (* Vérifier d'abord si c'est une variable locale ou un paramètre (dans stack_map) *)
+      match S.IdMap.find_opt id fd.stack_map with
+      | Some offset ->
+        (* Variable locale ou paramètre  *)
+        T.addr ~offset:(T.Lit offset) ~base:X86_64_Architecture.RBP ()
+      | None ->
+        (* Variable globale  *)
+        let label_string = data_label_of_global id in
+        T.addr ~offset:(T.Lab label_string) ~base:X86_64_Architecture.RIP ()
 
     let function_prologue fd =
-      (* Student! Implement me! *)
-      []
+      let open T in 
+      if empty_frame fd then []
+      else
+      insns [
+        pushq ~src:rbp;
+        movq ~src:rsp ~dst:rbp;
+        subq ~src:(liti fd.locals_space) ~dst:rsp;
+
+      ]
 
     let function_epilogue fd =
-      (* Student! Implement me! *)
-      []
+      let open T in 
+      if empty_frame fd then []
+      else
+      insns [
+        movq ~src:rbp ~dst:rsp;
+        popq ~dst:rbp;
+      ]
 
     let call fd ~kind ~f ~args =
       let open T in
-      let open X86_64_Architecture in
       
-      (* Préparation des registres pour arguments *)
-      let registers_for_params = List.map (fun r -> `Reg r) argument_passing_registers in
-
-      (* Conservation des registres utilisés *)
-      let backup_instructions = List.map (function `Reg r -> Instruction (pushr ~reg:r)) registers_for_params in
-
       (* Empilement des paramètres *)
       let stack_params = List.rev_map (fun param -> Instruction (pushq ~src:param)) args in
 
@@ -646,9 +719,6 @@ module FrameManager(IS : InstructionSelector) : FrameManager =
         (* Instruction d'appel *)
         let function_call = Instruction (calldi ~tgt:f) in
 
-        (* Récupération des registres *)
-        let recovery_instructions = List.map (function `Reg r -> Instruction (popr ~reg:r)) (List.rev registers_for_params) in
-
         (* Libération de la pile *)
         let stack_cleanup =
         let padding = if misalignment <> 0 then 16 - misalignment else 0 in
@@ -658,7 +728,7 @@ module FrameManager(IS : InstructionSelector) : FrameManager =
      
         match kind with
         | `Normal ->
-            backup_instructions @ alignment_fix @ stack_params @ [function_call] @ stack_cleanup @ recovery_instructions
+            alignment_fix @ stack_params @ [function_call] @ stack_cleanup
         | `Tail ->
             (* Appel terminal : nettoyage puis saut *)
             function_epilogue fd @ [Instruction (jmpdi ~tgt:f)]

@@ -20,7 +20,7 @@ void print_int(int64_t n) {
 }
 
 void observe_int(int64_t n) {
-  exit(n);
+  printf("%ld\n", n); 
 }
 
 intptr_t* allocate_block (int64_t n) {
