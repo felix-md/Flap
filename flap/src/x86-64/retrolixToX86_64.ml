@@ -565,9 +565,9 @@ module InstructionSelector : InstructionSelector =
     let div ~dst ~srcl ~srcr =
       let open X86_64_Architecture in 
       let r = fun reg -> `Reg reg in
-      (* RDX doit contenir 0 *)
-      mov ~src:(`Imm (Lit 0L)) ~dst:(r RDX) @
       mov ~src:srcl ~dst:(r RAX) @
+      (*utilisatino de cqto pour étendre la division signée*)
+      [Instruction (cqto)] @ 
       (* on mov dans R10  car idivq ne prends pas d'immédiat *)
       mov ~src:srcr ~dst:(r R10) @
       [Instruction (idivq ~src:(r R10))] @
@@ -583,7 +583,7 @@ module InstructionSelector : InstructionSelector =
       bin T.orq ~dst ~srcl ~srcr
 
     let compare ~srcl ~srcr =
-      (* cmpq src1, src2 calcule src2 - src1 
+      (* cmpq src1, src2 calcule src2 - src1
          Pour tester srcl OP srcr, on doit faire cmpq srcr, srcl *)
       match srcl with 
       | `Reg _ -> [Instruction (cmpq ~src1:srcr ~src2:srcl)]
@@ -655,10 +655,11 @@ module FrameManager(IS : InstructionSelector) : FrameManager =
     let add_locals stack locals =
       (* Les locales sont sous RBP : -8, -16, -24, etc. *)      
       add_stack_vars stack (-8L) (-8L) locals
-
     let frame_descriptor ~params ~locals =
-      let stack = S.IdMap.empty in 
+      let stack = S.IdMap.empty in
+      (* Params sur la pile : au-dessus de RBP *)
       let stack = add_params stack params in
+      (* Locals : sous RBP *)
       let stack = add_locals stack locals in
       let param_count = List.length params in
       let locals_space = List.length locals * 8 in 
@@ -676,15 +677,14 @@ module FrameManager(IS : InstructionSelector) : FrameManager =
         T.addr ~offset:(T.Lab label_string) ~base:X86_64_Architecture.RIP ()
 
     let function_prologue fd =
-      let open T in 
+      let open T in
       if empty_frame fd then []
       else
-      insns [
-        pushq ~src:rbp;
-        movq ~src:rsp ~dst:rbp;
-        subq ~src:(liti fd.locals_space) ~dst:rsp;
-
-      ]
+        insns [
+          pushq ~src:rbp;
+          movq ~src:rsp ~dst:rbp;
+          subq ~src:(liti fd.locals_space) ~dst:rsp;
+        ]
 
     let function_epilogue fd =
       let open T in 
@@ -698,16 +698,19 @@ module FrameManager(IS : InstructionSelector) : FrameManager =
     let call fd ~kind ~f ~args =
       let open T in
       
-      (* Empilement des paramètres *)
       let stack_params = List.rev_map (fun param -> Instruction (pushq ~src:param)) args in
 
-      (* Calcul de la taille occupée *)
-      let params_size = List.length args * 8 in 
-      let misalignment = (fd.locals_space + params_size) mod 16 in
+      let params_size = List.length args * 8 in
+      let rsp_offset = if empty_frame fd then 0 else 8 + fd.locals_space in
+      let rsp_after_params_mod_16 = (8 - rsp_offset - params_size) mod 16 in
+      (* mod peut donner un nombre négatif en OCaml, donc on normalise *)
+      let needed = if rsp_after_params_mod_16 < 0 
+                   then rsp_after_params_mod_16 + 16 
+                   else rsp_after_params_mod_16 in
       let alignment_fix =
-        if misalignment <> 0 then 
-          [Instruction (subq ~src:(liti (16 - misalignment)) ~dst:rsp)]
-        else 
+        if needed > 0 then
+          [Instruction (subq ~src:(liti needed) ~dst:rsp)]
+        else
           []
         in 
 
@@ -716,17 +719,16 @@ module FrameManager(IS : InstructionSelector) : FrameManager =
 
         (* Libération de la pile *)
         let stack_cleanup =
-        let padding = if misalignment <> 0 then 16 - misalignment else 0 in
-        [Instruction (addq ~src:(liti (params_size + padding)) ~dst:rsp)]
+        [Instruction (addq ~src:(liti (params_size + needed)) ~dst:rsp)]
       in
       
      
         match kind with
         | `Normal ->
-            alignment_fix @ stack_params @ [function_call] @ stack_cleanup
+          alignment_fix @ stack_params @ [function_call] @ stack_cleanup
         | `Tail ->
-            (* Appel terminal : nettoyage puis saut *)
-            function_epilogue fd @ [Instruction (jmpdi ~tgt:f)]
+          (* Appel terminal : nettoyage puis saut *)
+          function_epilogue fd @ [Instruction (jmpdi ~tgt:f)]
       
 
   end
