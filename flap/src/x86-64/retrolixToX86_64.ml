@@ -397,6 +397,7 @@ module Codegen(IS : InstructionSelector)(FM : FrameManager) =
 
     let translate_fun_def ~name ?(desc = "") ~params ~locals gen_body =
       let open T in
+      
 
       let fd = FM.frame_descriptor ~params ~locals in
 
@@ -502,34 +503,116 @@ module InstructionSelector : InstructionSelector =
     open T
 
     let mov ~(dst : dst) ~(src : src) =
-      failwith "Students! This is your job!"
+      match dst, src with
+      | `Addr _, `Addr _ ->
+        T.insns [T.movq ~src ~dst:scratch;
+         T.movq ~src:scratch ~dst]
+      | _ ->
+        T.insns [T.movq ~src ~dst]
 
     let bin ins ~dst ~srcl ~srcr =
-      failwith "Students! This is your job!"
+      (* Charger srcl dans dst *)
+      let code = mov ~dst ~src:srcl in
+      
+      (* Appliquer l'opération : dst = dst OP srcr *)
+      let code = code @
+        match dst, srcr with
+        | `Addr _, `Addr _ ->
+          (* Les deux en mémoire : charger srcr dans scratch puis opérer *)
+          T.insns [T.movq ~src:srcr ~dst:scratch;
+                   ins ~src:scratch ~dst]
+        | `Addr _, _ | _, `Addr _ ->
+          (* L'un des deux en mémoire : on peut faire l'opération directement
+             car x86-64 autorise une opérande mémoire si l'autre est registre *)
+          T.insns [ins ~src:srcr ~dst]
+        | _ ->
+          (* Aucun en mémoire : opération directe *)
+          T.insns [ins ~src:srcr ~dst]
+      in
+      code
 
     let add ~dst ~srcl ~srcr =
-      failwith "Students! This is your job!"
+      bin T.addq ~dst ~srcl ~srcr
 
     let sub ~dst ~srcl ~srcr =
-      failwith "Students! This is your job!"
+      bin T.subq ~dst ~srcl ~srcr
 
     let mul ~dst ~srcl ~srcr =
-      failwith "Students! This is your job!"
+      (* imul a une contrainte : la destination DOIT être un registre.
+         On doit charger dans scratch, multiplier, puis stocker. *)
+      match dst with
+      | `Reg _ ->
+          (* Destination est un registre : on peut utiliser bin normalement *)
+          bin T.imulq ~dst ~srcl ~srcr
+      | `Addr _ ->
+          (* Destination est en mémoire : utiliser scratch comme intermédiaire *)
+          let code = mov ~dst:scratch ~src:srcl in
+          let code = code @
+            (match srcr with
+             | `Addr _ ->
+                 (* srcr en mémoire : le charger d'abord dans un registre *)
+                 (* On ne peut pas réutiliser scratch, utilisons %rax *)
+                 let rax = `Reg X86_64_Architecture.RAX in
+                 T.insns [T.movq ~src:srcr ~dst:rax;
+                          T.imulq ~src:rax ~dst:scratch]
+             | _ ->
+                 (* srcr est registre ou immediat : on peut multiplier directement *)
+                 T.insns [T.imulq ~src:srcr ~dst:scratch]
+            )
+          in
+          code @ T.insns [T.movq ~src:scratch ~dst]
 
     let div ~dst ~srcl ~srcr =
-      failwith "Students! This is your job!"
+      let open X86_64_Architecture in 
+      let r = fun reg -> `Reg reg in
+      mov ~src:srcl ~dst:(r RAX) @
+      (*utilisatino de cqto pour étendre la division signée*)
+      [Instruction (cqto)] @ 
+      (* on mov dans R10  car idivq ne prends pas d'immédiat *)
+      mov ~src:srcr ~dst:(r R10) @
+      [Instruction (idivq ~src:(r R10))] @
+      mov ~src:(r RAX) ~dst:dst 
+
+
+      
 
     let andl ~dst ~srcl ~srcr =
-      failwith "Students! This is your job!"
+      bin T.andq ~dst ~srcl ~srcr
 
     let orl ~dst ~srcl ~srcr =
-      failwith "Students! This is your job!"
+      bin T.orq ~dst ~srcl ~srcr
+
+    let compare ~srcl ~srcr =
+      (* cmpq src1, src2 calcule src2 - src1
+         Pour tester srcl OP srcr, on doit faire cmpq srcr, srcl *)
+      match srcl with 
+      | `Reg _ -> [Instruction (cmpq ~src1:srcr ~src2:srcl)]
+      | `Imm _ | `Addr _ ->
+        mov ~src:srcl ~dst:scratch @ [Instruction (cmpq ~src1:srcr ~src2:scratch)]
 
     let conditional_jump ~cc ~srcl ~srcr ~ll ~lr =
-      failwith "Students! This is your job!"
+      compare ~srcl ~srcr @ 
+      [Instruction (jccl ~cc ~tgt:ll)] @
+       [Instruction (jmpl ~tgt:lr)]
 
     let switch ?default ~discriminant ~cases () =
-      failwith "Students! This is your job!"
+     
+      let rec generate_comparisons idx =
+        if idx >= Array.length cases then
+          match default with
+          | Some lbl -> [Instruction (jmpl ~tgt:lbl)]
+          | None -> []
+        else
+          let lbl = cases.(idx) in
+          compare ~srcl:discriminant ~srcr:(`Imm (Lit (Int64.of_int idx))) @
+          [Instruction (jccl ~cc:E ~tgt:lbl)] @
+          generate_comparisons (idx + 1)
+      in
+      generate_comparisons 0
+    
+
+
+
 
   end
 
@@ -558,23 +641,95 @@ module FrameManager(IS : InstructionSelector) : FrameManager =
       + (if empty_frame fd then 0 else 1) * Mint.size_in_bytes
       + fd.locals_space
 
+    let add_stack_vars stack start_offset step vars =
+        snd (List.fold_left 
+          (fun (offset, acc) var -> 
+            (Mint.add offset step, S.IdMap.add var offset acc))
+          (start_offset, stack)
+          vars)
+
+    let add_params stack params = 
+      (* 16 car RBP a 0 et adresse de retour à 8 *)
+      add_stack_vars stack 16L 8L params
+
+    let add_locals stack locals =
+      (* Les locales sont sous RBP : -8, -16, -24, etc. *)      
+      add_stack_vars stack (-8L) (-8L) locals
     let frame_descriptor ~params ~locals =
-      (* Student! Implement me! *)
-      { param_count = 0; locals_space = 0; stack_map = S.IdMap.empty; }
+      let stack = S.IdMap.empty in
+      (* Params sur la pile : au-dessus de RBP *)
+      let stack = add_params stack params in
+      (* Locals : sous RBP *)
+      let stack = add_locals stack locals in
+      let param_count = List.length params in
+      let locals_space = List.length locals * 8 in 
+      { param_count; locals_space; stack_map = stack; }
 
     let location_of fd id =
-      failwith "Students! This is your job!"
+      (* Vérifier d'abord si c'est une variable locale ou un paramètre (dans stack_map) *)
+      match S.IdMap.find_opt id fd.stack_map with
+      | Some offset ->
+        (* Variable locale ou paramètre  *)
+        T.addr ~offset:(T.Lit offset) ~base:X86_64_Architecture.RBP ()
+      | None ->
+        (* Variable globale  *)
+        let label_string = data_label_of_global id in
+        T.addr ~offset:(T.Lab label_string) ~base:X86_64_Architecture.RIP ()
 
     let function_prologue fd =
-      (* Student! Implement me! *)
-      []
+      let open T in
+      if empty_frame fd then []
+      else
+        insns [
+          pushq ~src:rbp;
+          movq ~src:rsp ~dst:rbp;
+          subq ~src:(liti fd.locals_space) ~dst:rsp;
+        ]
 
     let function_epilogue fd =
-      (* Student! Implement me! *)
-      []
+      let open T in 
+      if empty_frame fd then []
+      else
+      insns [
+        movq ~src:rbp ~dst:rsp;
+        popq ~dst:rbp;
+      ]
 
     let call fd ~kind ~f ~args =
-      failwith "Students! This is your job!"
+      let open T in
+      
+      let stack_params = List.rev_map (fun param -> Instruction (pushq ~src:param)) args in
+
+      let params_size = List.length args * 8 in
+      let rsp_offset = if empty_frame fd then 0 else 8 + fd.locals_space in
+      let rsp_after_params_mod_16 = (8 - rsp_offset - params_size) mod 16 in
+      (* mod peut donner un nombre négatif en OCaml, donc on normalise *)
+      let needed = if rsp_after_params_mod_16 < 0 
+                   then rsp_after_params_mod_16 + 16 
+                   else rsp_after_params_mod_16 in
+      let alignment_fix =
+        if needed > 0 then
+          [Instruction (subq ~src:(liti needed) ~dst:rsp)]
+        else
+          []
+        in 
+
+        (* Instruction d'appel *)
+        let function_call = Instruction (calldi ~tgt:f) in
+
+        (* Libération de la pile *)
+        let stack_cleanup =
+        [Instruction (addq ~src:(liti (params_size + needed)) ~dst:rsp)]
+      in
+      
+     
+        match kind with
+        | `Normal ->
+          alignment_fix @ stack_params @ [function_call] @ stack_cleanup
+        | `Tail ->
+          (* Appel terminal : nettoyage puis saut *)
+          function_epilogue fd @ [Instruction (jmpdi ~tgt:f)]
+      
 
   end
 

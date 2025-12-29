@@ -1,0 +1,28 @@
+def fact ( )
+local sub_res, n:
+
+    f1: n <- copy %rdi;
+
+    f2: jumpif lte n, 1 -> f3, f5;
+
+    f3: %rax <- copy 1;
+    f4: ret;
+
+    f5: %rdi <- sub n, 1;
+    f6: fact();
+
+    f7: sub_res <- copy %rax;
+    f8: %rax <- mul sub_res, n;
+
+    f9: ret;
+end
+
+
+globals (x)
+    l00: %rdi <- copy 5;
+    l01: fact();
+    l02: x <- copy %rax;
+    l03: %rdi <- copy x;
+    l04: observe_int();
+    l05: exit;
+end

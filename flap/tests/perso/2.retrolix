@@ -1,0 +1,19 @@
+globals (x, y, z, k)
+    l00: x <- copy 6;
+    l01: %rdi <- copy x;
+    l02: print_int();
+
+    l03: y <- copy 7;
+    l04: %rdi <- copy y;
+    l05: print_int();
+
+    l06: z <- mul y, x;
+    l07: %rdi <- copy z;
+    l08: print_int();
+
+    l09: k <- sub z, x;
+    l10: %rdi <- copy k;
+    l11: print_int();
+
+    l12: exit;
+end
